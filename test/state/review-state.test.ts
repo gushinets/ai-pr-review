@@ -117,3 +117,86 @@ describe("canonical state boundary", () => {
     expect(() => parseReviewState(JSON.stringify(state))).toThrow("STATE_LOAD_FAILED");
   });
 });
+describe("fixed history annotation privacy boundary", () => {
+  it.each(["available", "prior review"])(
+    "retains central no-history prose when private source is %j",
+    (word) => {
+      const { schema_version: _, findings: _findings, ...input } = stateFixture();
+      input.judge_result!.summary = "Model-private-summary-canary";
+      const built = buildReviewState(
+        input,
+        { privateTexts: [word, "Model-private-summary-canary"], secretValues: [] },
+        buildDiffIndex(""),
+        "unavailable",
+      );
+      const saved = parseReviewState(JSON.stringify(built));
+      expect(saved.outcome).toBe("PASS");
+      expect(saved.judge_result?.summary).toBe(
+        "[REDACTED PRIVATE SOURCE]\n\nNo compatible prior review was available; historical verification was not performed.",
+      );
+      expect(JSON.stringify(saved)).not.toContain("Model-private-summary-canary");
+    },
+  );
+  it("retains only fixed incomplete-history prose despite a private word overlap", () => {
+    const { schema_version: _, findings: _findings, ...input } = stateFixture();
+    const built = buildReviewState(
+      input,
+      { privateTexts: ["available"], secretValues: [] },
+      buildDiffIndex(""),
+      "incomplete",
+    );
+    expect(parseReviewState(JSON.stringify(built)).judge_result?.summary).toBe(
+      input.judge_result!.summary +
+        "\n\nHistorical verification was incomplete because some prior findings were unavailable.",
+    );
+  });
+  it("keeps default and complete-history payloads exactly unchanged", () => {
+    const { schema_version: _, findings: _findings, ...input } = stateFixture();
+    const sources = { privateTexts: ["available"], secretValues: [] };
+    expect(buildReviewState(input, sources, buildDiffIndex(""))).toEqual(stateFixture());
+    expect(buildReviewState(input, sources, buildDiffIndex(""), "complete")).toEqual(
+      stateFixture(),
+    );
+  });
+  it.each(["arbitrary trusted prose", "__proto__", null, {}])(
+    "rejects invalid annotation enum %j",
+    (value) => {
+      const { schema_version: _, findings: _findings, ...input } = stateFixture();
+      expect(() =>
+        buildReviewState(
+          input,
+          { privateTexts: [], secretValues: [] },
+          buildDiffIndex(""),
+          value as never,
+        ),
+      ).toThrow();
+    },
+  );
+  it("fails closed if the fixed template contains an exact known secret", () => {
+    const { schema_version: _, findings: _findings, ...input } = stateFixture();
+    const built = buildReviewState(
+      input,
+      { privateTexts: [], secretValues: ["prior review"] },
+      buildDiffIndex(""),
+      "unavailable",
+    );
+    expect(parseReviewState(JSON.stringify(built))).toMatchObject({
+      outcome: "UNABLE_TO_REVIEW",
+      unable_reason: "INTERNAL_ERROR",
+      judge_result: null,
+      findings: [],
+    });
+    expect(JSON.stringify(built)).not.toContain("prior review");
+  });
+  it("throws if a template credential collision also makes the fallback unsafe", () => {
+    const { schema_version: _, findings: _findings, ...input } = stateFixture();
+    expect(() =>
+      buildReviewState(
+        input,
+        { privateTexts: [], secretValues: ["available"] },
+        buildDiffIndex(""),
+        "unavailable",
+      ),
+    ).toThrow();
+  });
+});

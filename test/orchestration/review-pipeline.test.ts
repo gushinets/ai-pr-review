@@ -12,6 +12,7 @@ import type { GithubReadClient } from "../../src/github/github-client.js";
 import type { PreflightResult } from "../../src/orchestration/preflight-pipeline.js";
 import type { JudgeResultV1 } from "../../src/contracts/judge-result.js";
 import type { ReviewStateV1 } from "../../src/contracts/review-state.js";
+import type { LinearRequirementsContextV1 } from "../../src/linear/requirements-loader.js";
 import type { StateDiscovery } from "../../src/state/github-artifact-store.js";
 import { buildReviewState, parseReviewState } from "../../src/state/review-state.js";
 import { type RejudgeEngine, RejudgeEngineError } from "../../src/review-engine/rejudge-engine.js";
@@ -115,7 +116,7 @@ async function fixture() {
     calls.push("state");
     return { kind: "fresh", previous: null, history: [], rerunnable: null };
   });
-  const loadRequirements = vi.fn(async () => {
+  const loadRequirements = vi.fn(async (): Promise<LinearRequirementsContextV1> => {
     calls.push("linear");
     return {
       schema_version: 1 as const,
@@ -1038,4 +1039,55 @@ it("keeps the canonical history disclosure after sanitizing private model summar
   );
   expect(serialized).not.toMatch(/Private task title|qwen-canary/);
   expect(saved.outcome).toBe("PASS");
+});
+it.each(["available", "prior review"])(
+  "preserves canonical history note with overlapping private Linear comment %j",
+  async (body) => {
+    const f = await fixture();
+    f.loadRequirements.mockResolvedValue({
+      schema_version: 1,
+      identifier: "ANY-1",
+      title: "Private task title",
+      description: "Private description",
+      comments: [{ created_at: "2026-09-11T00:00:00Z", body }],
+    });
+    f.engine.fresh.mockResolvedValue({
+      run_id: runId,
+      answer: JSON.stringify({ ...pass, summary: "Private task title and qwen-canary" }),
+    });
+    const result = await runReviewPipeline(
+      { preflight: f.preflight, workDir: f.workDir },
+      f.prepare,
+      f.execute,
+    );
+    expect(result.kind).toBe("STATE_READY");
+    if (result.kind !== "STATE_READY") return;
+    const serialized = JSON.stringify(result.state),
+      saved = parseReviewState(serialized);
+    expect(saved.outcome).toBe("PASS");
+    expect(saved.judge_result?.summary).toBe(
+      "[REDACTED PRIVATE SOURCE]\n\nNo compatible prior review was available; historical verification was not performed.",
+    );
+    expect(serialized).not.toMatch(/Private task title|qwen-canary/);
+  },
+);
+
+it("retains the canonical builder's UNABLE outcome on a disclosure credential collision", async () => {
+  const f = await fixture();
+  f.execute.secretValues = ["prior review"];
+  const result = await runReviewPipeline(
+    { preflight: f.preflight, workDir: f.workDir },
+    f.prepare,
+    f.execute,
+  );
+  expect(result).toMatchObject({
+    kind: "STATE_READY",
+    state: {
+      outcome: "UNABLE_TO_REVIEW",
+      unable_reason: "INTERNAL_ERROR",
+      judge_result: null,
+      findings: [],
+    },
+  });
+  expect(JSON.stringify(result)).not.toContain("prior review");
 });

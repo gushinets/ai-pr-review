@@ -64,7 +64,11 @@ import {
 import { computeFreshVerdict, computeFinalVerdict } from "../review-engine/verdict.js";
 import { assertRealpathContained } from "../sandbox/path-containment.js";
 import type { StateDiscovery } from "../state/github-artifact-store.js";
-import { buildReviewState, parseReviewState } from "../state/review-state.js";
+import {
+  buildReviewState,
+  parseReviewState,
+  type HistoricalVerificationAvailability,
+} from "../state/review-state.js";
 import type { PreflightResult } from "./preflight-pipeline.js";
 
 export type ReviewPipelineResult =
@@ -180,11 +184,12 @@ async function finish(
   state: Omit<ReviewStateV1, "schema_version" | "findings">,
   privacy: SanitizationSources,
   diff = emptyDiff,
+  historyAvailability: HistoricalVerificationAvailability = "complete",
 ): Promise<ReviewPipelineResult> {
   state.telemetry.finished_at = new Date().toISOString();
   state.telemetry.duration_ms = Math.max(0, Date.now() - Date.parse(state.telemetry.started_at));
   // Build first: this barrier is the last external operation before returning an emit-ready state.
-  const sanitized = buildReviewState(state, privacy, diff);
+  const sanitized = buildReviewState(state, privacy, diff, historyAvailability);
   return (await current(input, github)) ?? { kind: "STATE_READY", state: sanitized };
 }
 async function current(
@@ -466,7 +471,7 @@ async function readPrepared(input: ReviewInput): Promise<{
 function previousBlockers(
   history: ReviewStateV1[],
   warn: (message: string) => void,
-): { blockers: ReviewFindingV1[]; availability: "unavailable" | "incomplete" | "complete" } {
+): { blockers: ReviewFindingV1[]; availability: HistoricalVerificationAvailability } {
   const previous = history[0];
   if (!previous) return { blockers: [], availability: "unavailable" };
   let availability: "incomplete" | "complete" = "complete";
@@ -512,6 +517,7 @@ export async function executeReview(
   validateInput(input);
   const state = initialState(input, new Date().toISOString());
   const privacy = sources(dependencies.secretValues);
+  let historyAvailability: HistoricalVerificationAvailability = "complete";
   let diff = emptyDiff,
     stage: UnableReason = "INTERNAL_ERROR";
   try {
@@ -578,13 +584,7 @@ export async function executeReview(
       prepared.history,
       dependencies.warn ?? (() => {}),
     );
-    if (availability !== "complete") {
-      const disclosure =
-        availability === "unavailable"
-          ? "No compatible prior review was available; historical verification was not performed."
-          : "Historical verification was incomplete because some prior findings were unavailable.";
-      state.judge_result.summary += `\n\n${disclosure}`;
-    }
+    historyAvailability = availability;
     if (blockers.length) {
       state.previous_review_head_sha = prepared.history[0]!.attempt_identity.head_sha;
       state.telemetry.closure_used = true;
@@ -640,7 +640,7 @@ export async function executeReview(
             : "judge";
     }
   }
-  return finish(input, dependencies.github, state, privacy, diff);
+  return finish(input, dependencies.github, state, privacy, diff, historyAvailability);
 }
 
 export async function runReviewPipeline(

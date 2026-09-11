@@ -10,12 +10,16 @@ import {
 } from "../publishing/sanitize.js";
 
 export type SanitizedReviewPayloadV1 = ReviewStateV1;
+export type HistoricalVerificationAvailability = "unavailable" | "incomplete" | "complete";
 
 export function buildReviewState(
   input: Omit<ReviewStateV1, "schema_version" | "findings">,
   sources: SanitizationSources,
   diff: DiffIndex,
+  historyAvailability: HistoricalVerificationAvailability = "complete",
 ): SanitizedReviewPayloadV1 {
+  if (!["unavailable", "incomplete", "complete"].includes(historyAvailability))
+    throw new Error("Invalid history availability");
   // Validate trusted identity and ephemeral contracts independently of privacy failure.
   if ("schema_version" in input || "findings" in input) throw new Error("Invalid ReviewStateV1");
   const validated = validateReviewState({ ...input, schema_version: 1, findings: [] });
@@ -46,6 +50,17 @@ export function buildReviewState(
       state.resolution_result = sanitizeResolutionResult(state.resolution_result, sources);
     if (!validateReviewState(state).ok) throw new Error("INTERNAL_ERROR");
     assertDurableValues(state, sources);
+    if (state.judge_result !== null && historyAvailability !== "complete") {
+      const disclosure =
+        historyAvailability === "unavailable"
+          ? "No compatible prior review was available; historical verification was not performed."
+          : "Historical verification was incomplete because some prior findings were unavailable.";
+      // All model/private data passed the original privacy checks above. Only fixed central prose
+      // is added here; credential checks still cover the entire assembled payload.
+      state.judge_result.summary += `\n\n${disclosure}`;
+      if (!validateReviewState(state).ok) throw new Error("INTERNAL_ERROR");
+      assertDurableValues(state, { privateTexts: [], secretValues: sources.secretValues });
+    }
     return state;
   } catch {
     // Drop unsafe results and nonessential metadata. Never invent a replacement identity.
