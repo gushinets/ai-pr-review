@@ -60,16 +60,23 @@ export function parsePrMetadata(title: string, body: string | null): string | nu
   for (const match of rendered.matchAll(/https?:\/\//g)) {
     const start = match.index;
     const angleDestination = rendered[start - 1] === "<";
+    const markdownDestination = /\]\([ \t\n]*$/.test(rendered.slice(0, start));
     let end = start;
     let parentheses = 0;
+    let trailingUnmatched = 0;
     for (; end < rendered.length; end++) {
       const character = rendered[end]!;
       if (/[\s<>`]/.test(character)) break;
-      if (!angleDestination && character === ")" && parentheses === 0) break;
-      if (character === "(") parentheses++;
-      if (character === ")") parentheses--;
+      if (markdownDestination && character === ")" && parentheses === 0) break;
+      if (character === ")" && parentheses === 0) trailingUnmatched++;
+      else {
+        trailingUnmatched = 0;
+        if (character === "(") parentheses++;
+        if (character === ")") parentheses--;
+      }
     }
-    // Keep balanced parentheses and other invalid suffixes, rather than accepting a valid prefix.
+    // Bare autolinks drop only trailing unmatched punctuation, never an interior suffix.
+    if (!angleDestination && !markdownDestination) end -= trailingUnmatched;
     urls.push(rendered.slice(start, end));
   }
   if (sections !== 1 || urls.length !== 1) return null;

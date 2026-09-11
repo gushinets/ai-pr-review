@@ -92,3 +92,19 @@ it("keeps unmatched closing parenthesis punctuation outside a bare URL", () => {
 it("retains unmatched parentheses inside explicit angle destinations", () => {
   expect(parsePrMetadata(title, `## Linear issue\n<${url})evil>`)).toBeNull();
 });
+
+it.each([
+  [`## Linear issue\n${url})evil`, null],
+  [`## Linear issue\n${url})evil)`, null],
+  [`## Linear issue\n(${url})`, "ANY-451"],
+  [`## Linear issue\n((${url}))`, "ANY-451"],
+  [`## Linear issue\n[Ticket](${url})text`, "ANY-451"],
+  [`## Linear issue\n<${url}>text`, "ANY-451"],
+  [`## Linear issue\n${url}(evil)`, null],
+  [`## Linear issue\n${url}(evil))`, null],
+] as const)(
+  "validates the complete bare token while respecting explicit delimiters %j",
+  (value, expected) => {
+    expect(parsePrMetadata(title, value)).toBe(expected);
+  },
+);
