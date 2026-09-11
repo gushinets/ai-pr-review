@@ -22,9 +22,10 @@ export function buildReviewState(
   if (!validated.ok) throw new Error("Invalid ReviewStateV1");
   const state = structuredClone(validated.value);
   assertDurableValues(state.attempt_identity, sources);
+  // The exact base branch is a state-reuse key; redaction would silently break identity reuse.
+  assertDurableValues(state.lineage.base_branch, sources);
   const sanitize = (text: string) => sanitizeDurableText(text, sources);
   try {
-    state.lineage.base_branch = sanitize(state.lineage.base_branch);
     if (state.ci_summary !== null) {
       state.ci_summary.primary_ci_workflow = sanitize(state.ci_summary.primary_ci_workflow);
       for (const check of state.ci_summary.checks) check.name = sanitize(check.name);
@@ -58,7 +59,7 @@ export function buildReviewState(
       attempt_identity: state.attempt_identity,
       review_identity: state.review_identity,
       lineage: {
-        base_branch: sanitize(input.lineage.base_branch) || "[REDACTED]",
+        base_branch: state.lineage.base_branch,
         linear_issue: state.review_identity?.linear_issue ?? null,
       },
       outcome: "UNABLE_TO_REVIEW",

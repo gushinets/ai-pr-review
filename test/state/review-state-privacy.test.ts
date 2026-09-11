@@ -98,7 +98,6 @@ describe("canonical privacy release blocker", () => {
     input.resolution_result!.resolutions[0]!.evidence = sources.secretValues[2]!;
     input.ci_summary!.checks[0]!.name = sources.secretValues[0]!;
     input.ci_summary!.primary_ci_workflow = sources.privateTexts[1]!;
-    input.lineage.base_branch = sources.secretValues[1]!;
     input.telemetry.started_at = sources.secretValues[2]!;
     input.telemetry.finished_at = sources.privateTexts[0]!;
     input.telemetry.models[0]!.model_id = sources.secretValues[1]!;
@@ -127,6 +126,24 @@ describe("canonical privacy release blocker", () => {
     });
     expect(state.resolution_result!.resolutions[0]!.previous_finding_id).toBe("previous-id");
     expect(input).toEqual(before);
+  });
+  it.each([false, true])(
+    "rejects unsafe lineage without rewriting a canonical state (fallback=%s)",
+    (fallback) => {
+      const input = inputFixture();
+      input.lineage.base_branch = "linear-secret-456";
+      if (fallback) input.judge_result!.summary = "\u0000";
+      expect(() => buildReviewState(input, sources, diff)).toThrow(/^INTERNAL_ERROR$/);
+      expect(input.lineage.base_branch).toBe("linear-secret-456");
+    },
+  );
+  it("preserves the exact safe lineage when result sanitization fails", () => {
+    const input = inputFixture();
+    input.lineage.base_branch = "release/2026.09";
+    input.judge_result!.summary = "\u0000";
+    const state = buildReviewState(input, sources, diff);
+    expect(state.outcome).toBe("UNABLE_TO_REVIEW");
+    expect(state.lineage.base_branch).toBe("release/2026.09");
   });
   it("derives wrapper IDs from visible sanitized text", () => {
     const first = inputFixture();

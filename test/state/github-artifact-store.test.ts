@@ -4,6 +4,8 @@ import { strToU8, zipSync, Zip, ZipDeflate } from "fflate";
 import { describe, expect, it } from "vitest";
 import type { ReviewIdentityV1 } from "../../src/contracts/review-identity.js";
 import type { ReviewStateV1 } from "../../src/contracts/review-state.js";
+import { buildDiffIndex } from "../../src/github/diff.js";
+import { buildReviewState } from "../../src/state/review-state.js";
 import { GitHubArtifactStateStore } from "../../src/state/github-artifact-store.js";
 
 const identity: ReviewIdentityV1 = {
@@ -138,6 +140,36 @@ function setup(entries: Entry[], listOverride?: unknown) {
 }
 
 describe("trusted canonical artifact discovery", () => {
+  it.each(["PASS", "BLOCK"] as const)(
+    "reuses an assembled %s under its exact safe base branch",
+    async (outcome) => {
+      const { schema_version: _, findings: _findings, ...input } = state({}, outcome);
+      input.lineage.base_branch = "release/2026.09";
+      input.judge_result!.summary = "linear-secret-456";
+      if (outcome === "BLOCK")
+        input.judge_result!.findings = [
+          {
+            severity: "blocking",
+            confidence: "high",
+            title: "Missing guard",
+            location: null,
+            basis: ["code"],
+            evidence: "Unchecked input",
+            rationale: "Can crash",
+            remediation: "Validate input",
+          },
+        ];
+      const saved = buildReviewState(
+        input,
+        { privateTexts: [], secretValues: ["linear-secret-456"] },
+        buildDiffIndex(""),
+      );
+      expect(saved.judge_result!.summary).toBe("[REDACTED]");
+      expect(
+        await setup([{ id: 1, value: saved }]).store.load(identity, "release/2026.09"),
+      ).toEqual({ kind: "reuse", state: saved });
+    },
+  );
   it.each(["PASS", "BLOCK"] as const)(
     "reuses exact identity %s despite failed presentation and different workflow head",
     async (outcome) => {
