@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { buildDiffIndex } from "../../src/github/diff.js";
 import type { ReviewStateV1 } from "../../src/contracts/review-state.js";
 import { buildReviewState, parseReviewState } from "../../src/state/review-state.js";
 
@@ -40,8 +41,12 @@ function stateFixture(): ReviewStateV1 {
 
 describe("canonical state boundary", () => {
   it("builds and round-trips an independent, strictly validated state", () => {
-    const { schema_version: _, ...input } = stateFixture();
-    const built = buildReviewState(input);
+    const { schema_version: _, findings: _findings, ...input } = stateFixture();
+    const built = buildReviewState(
+      input,
+      { privateTexts: [], secretValues: [] },
+      buildDiffIndex(""),
+    );
     expect(parseReviewState(JSON.stringify(built))).toEqual(stateFixture());
     input.telemetry.duration_ms = 22;
     expect(built.telemetry.duration_ms).toBe(1000);
@@ -64,9 +69,17 @@ describe("canonical state boundary", () => {
       { ...original, judge_result: { ...original.judge_result!, [key]: "private" } },
     ]) {
       expect(() => parseReviewState(JSON.stringify(altered))).toThrow("STATE_LOAD_FAILED");
-      expect(() => buildReviewState(altered)).toThrow();
+      const { schema_version: _, findings: _findings, ...input } = altered;
+      expect(() =>
+        buildReviewState(input, { privateTexts: [], secretValues: [] }, buildDiffIndex("")),
+      ).toThrow();
     }
-    expect(JSON.stringify(buildReviewState(original))).not.toContain(`"${key}":`);
+    const { schema_version: _, findings: _findings, ...input } = original;
+    expect(
+      JSON.stringify(
+        buildReviewState(input, { privateTexts: [], secretValues: [] }, buildDiffIndex("")),
+      ),
+    ).not.toContain(`"${key}":`);
   });
   it.each([
     { schema_version: 2 },
