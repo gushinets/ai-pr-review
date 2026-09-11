@@ -360,3 +360,19 @@ export async function loadPrDiff(
     throw new DiffError();
   }
 }
+
+export interface UnifiedDiffSection {
+  oldPath: string;
+  path: string;
+  start: number;
+  end: number;
+}
+export function unifiedDiffSections(diff: string): UnifiedDiffSection[] {
+  buildDiffIndex(diff);
+  const starts = [...diff.matchAll(/^diff --git /gm)].map((match) => match.index);
+  return starts.map((start, i) => ({
+    ...diffPaths(diff.slice(start, starts[i + 1]).split("\n"), 0),
+    start,
+    end: starts[i + 1] ?? diff.length,
+  }));
+}

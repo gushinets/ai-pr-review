@@ -1,3 +1,6 @@
+import { ReadableStream } from "node:stream/web";
+import { Readable } from "node:stream";
+import { createGunzip } from "node:zlib";
 import type { Octokit } from "@octokit/rest";
 import { setTimeout } from "node:timers/promises";
 import { CENTRAL_CONFIG } from "../config/central-config.js";
@@ -27,6 +30,7 @@ export interface GitHubWorkflowJob {
   checkRunUrl: string;
 }
 export interface GithubReadClient extends GitHubReader {
+  downloadHeadArchive(repository: string, headSha: string): Promise<Readable>;
   getPullRequestDiff(repository: string, prNumber: number): Promise<string>;
   listCheckRuns(repository: string, headSha: string): Promise<GitHubCheckRun[]>;
   getCommitStatuses(
@@ -82,6 +86,18 @@ function repoParams(repository: string) {
 // Only explicit GET endpoints are exposed. Retry scope is a single read/page.
 export function createGitHubClient(octokit: Octokit): GithubReadClient {
   return {
+    async downloadHeadArchive(repository, headSha) {
+      if (!/^[0-9a-f]{40}$/i.test(headSha)) throw new Error("ARCHIVE_SHA_REJECTED");
+      const { data } = await retryRead(() =>
+        octokit.rest.repos.downloadTarballArchive({
+          ...repoParams(repository),
+          ref: headSha,
+          request: { parseSuccessResponseBody: false },
+        }),
+      );
+      if (!(data instanceof ReadableStream)) throw new Error("ARCHIVE_STREAM_UNAVAILABLE");
+      return Readable.fromWeb(data).compose(createGunzip());
+    },
     async getPullRequestDiff(repository, prNumber) {
       const { data } = await retryRead(() =>
         octokit.rest.pulls.get({
