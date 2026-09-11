@@ -144,6 +144,12 @@ describe("other V1 schemas", () => {
       ],
     };
     expect(validateResolutionResult(resolution).ok).toBe(true);
+    expect(
+      validateResolutionResult({
+        ...resolution,
+        resolutions: [{ ...resolution.resolutions[0], confidence: "medium" }],
+      }).ok,
+    ).toBe(false);
     expect(validateResolutionResult({ ...resolution, verdict: "PASS" }).ok).toBe(false);
     expect(
       validateResolutionResult({
@@ -242,6 +248,43 @@ describe("other V1 schemas", () => {
             publication_location: null,
           },
         ],
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateReviewState({
+        ...state,
+        resolution_result: {
+          schema_version: 1,
+          resolutions: [
+            {
+              previous_finding_id: "finding-1",
+              status: "resolved",
+              confidence: "medium",
+              current_location: null,
+              evidence: "gone",
+            },
+          ],
+        },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateReviewState({
+        ...state,
+        outcome: "UNABLE_TO_REVIEW",
+        review_identity: null,
+        lineage: { ...state.lineage, linear_issue: null },
+        unable_reason: "JUDGE_RESULT_INVALID",
+        ci_summary: null,
+        judge_result: null,
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateReviewState({
+        ...state,
+        outcome: "UNABLE_TO_REVIEW",
+        unable_reason: "SNAPSHOT_FAILED",
+        ci_summary: null,
+        judge_result: null,
       }).ok,
     ).toBe(false);
     expect(

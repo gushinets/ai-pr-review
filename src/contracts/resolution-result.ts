@@ -1,10 +1,6 @@
 import Schema from "typebox/schema";
 import { Type } from "typebox";
-import {
-  isRepositoryRelativePath,
-  type FindingConfidence,
-  type ValidationResult,
-} from "./common.js";
+import { isRepositoryRelativePath, type ValidationResult } from "./common.js";
 import { JudgeLocationV1Schema, type JudgeLocationV1 } from "./judge-result.js";
 
 export type ResolutionStatus = "resolved" | "still_present" | "invalidated" | "uncertain";
@@ -12,7 +8,7 @@ export type ResolutionStatus = "resolved" | "still_present" | "invalidated" | "u
 export interface FindingResolutionV1 {
   previous_finding_id: string;
   status: ResolutionStatus;
-  confidence: FindingConfidence;
+  confidence: "high";
   current_location: JudgeLocationV1 | null;
   evidence: string;
 }
@@ -31,7 +27,7 @@ const FindingResolutionV1Schema = Type.Object(
       Type.Literal("invalidated"),
       Type.Literal("uncertain"),
     ]),
-    confidence: Type.Union([Type.Literal("high"), Type.Literal("medium"), Type.Literal("low")]),
+    confidence: Type.Literal("high"),
     current_location: Type.Union([JudgeLocationV1Schema, Type.Null()]),
     evidence: Type.String({ minLength: 1 }),
   },

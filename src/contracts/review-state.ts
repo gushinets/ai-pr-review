@@ -202,6 +202,34 @@ export const ReviewStateV1Schema = Type.Object(
 
 const validator = Schema.Compile(ReviewStateV1Schema);
 
+const identityRequiredReasons = new Set<UnableReason>([
+  "POLICY_MISSING",
+  "PR_TOO_LARGE",
+  "LINEAR_AUTH_FAILED",
+  "LINEAR_NOT_FOUND",
+  "LINEAR_UNAVAILABLE",
+  "LINEAR_CONTEXT_TOO_LARGE",
+  "CI_CONTEXT_UNAVAILABLE",
+  "SNAPSHOT_FAILED",
+  "STATE_LOAD_FAILED",
+  "REJUDGE_PANEL_FAILED",
+  "REJUDGE_JUDGE_FAILED",
+  "JUDGE_RESULT_INVALID",
+  "JUDGE_REPAIR_FAILED",
+  "CLOSURE_FAILED",
+  "CLOSURE_RESULT_INVALID",
+]);
+
+const ciRequiredReasons = new Set<UnableReason>([
+  "SNAPSHOT_FAILED",
+  "REJUDGE_PANEL_FAILED",
+  "REJUDGE_JUDGE_FAILED",
+  "JUDGE_RESULT_INVALID",
+  "JUDGE_REPAIR_FAILED",
+  "CLOSURE_FAILED",
+  "CLOSURE_RESULT_INVALID",
+]);
+
 export function validateReviewState(value: unknown): ValidationResult<ReviewStateV1> {
   if (!validator.Check(value)) return { ok: false, errors: ["Invalid ReviewStateV1 schema"] };
   const state = value as ReviewStateV1;
@@ -213,6 +241,12 @@ export function validateReviewState(value: unknown): ValidationResult<ReviewStat
         state.judge_result === null ||
         state.ci_summary === null)) ||
     (state.outcome === "UNABLE_TO_REVIEW" && state.unable_reason === null) ||
+    (state.unable_reason !== null &&
+      identityRequiredReasons.has(state.unable_reason) &&
+      state.review_identity === null) ||
+    (state.unable_reason !== null &&
+      ciRequiredReasons.has(state.unable_reason) &&
+      state.ci_summary === null) ||
     (state.review_identity === null && state.lineage.linear_issue !== null) ||
     (state.ci_summary !== null && state.ci_summary.head_sha !== state.attempt_identity.head_sha)
   )
