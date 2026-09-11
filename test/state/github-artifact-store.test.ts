@@ -1,3 +1,4 @@
+import { crc32 } from "node:zlib";
 import { Octokit } from "@octokit/rest";
 import { strToU8, zipSync, Zip, ZipDeflate } from "fflate";
 import { describe, expect, it } from "vitest";
@@ -437,4 +438,44 @@ it("fails closed when retained artifact chronology is unavailable", async () => 
     artifacts: [{ ...artifact(1), created_at: null }],
   });
   await expect(store.load(identity, "main")).rejects.toThrow("STATE_LOAD_FAILED");
+});
+
+describe("actual ZIP expansion bounds", () => {
+  it.each([4096, 16 * 1024 * 1024 + 1])(
+    "rejects forged state-prefix metadata with %s additional expanded bytes",
+    async (extraBytes) => {
+      const prefix = strToU8(JSON.stringify(state()));
+      const bytes = zipSync({
+        "ai-review-state-v1.json": Buffer.concat([prefix, new Uint8Array(extraBytes).fill(32)]),
+      });
+      const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      const directory = view.getUint32(bytes.length - 6, true);
+      // Lie consistently in both headers: unzipSync otherwise returns just this valid prefix.
+      view.setUint32(14, crc32(prefix), true);
+      view.setUint32(22, prefix.length, true);
+      view.setUint32(directory + 16, crc32(prefix), true);
+      view.setUint32(directory + 24, prefix.length, true);
+      await expect(setup([{ id: 1, bytes }]).store.load(identity, "main")).rejects.toThrow(
+        "STATE_LOAD_FAILED",
+      );
+    },
+  );
+  it("rejects bytes after the deflate stream inside the declared compressed member", async () => {
+    const original = archive();
+    const originalView = new DataView(original.buffer, original.byteOffset, original.byteLength);
+    const directory = originalView.getUint32(original.length - 6, true);
+    const compressedSize = originalView.getUint32(18, true);
+    const bytes = Buffer.concat([
+      original.subarray(0, directory),
+      new Uint8Array([1, 2, 3]),
+      original.subarray(directory),
+    ]);
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    view.setUint32(18, compressedSize + 3, true);
+    view.setUint32(directory + 3 + 20, compressedSize + 3, true);
+    view.setUint32(bytes.length - 6, directory + 3, true);
+    await expect(setup([{ id: 1, bytes }]).store.load(identity, "main")).rejects.toThrow(
+      "STATE_LOAD_FAILED",
+    );
+  });
 });

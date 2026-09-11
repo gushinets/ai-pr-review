@@ -1,5 +1,5 @@
 import { ReadableStream } from "node:stream/web";
-import { crc32 } from "node:zlib";
+import { crc32, inflateRawSync } from "node:zlib";
 import type { Octokit } from "@octokit/rest";
 import { unzipSync } from "fflate";
 import { validateReviewIdentity, type ReviewIdentityV1 } from "../contracts/review-identity.js";
@@ -114,6 +114,28 @@ function parseZip(bytes: Uint8Array): ReviewStateV1 {
     view.getUint32(metadata + 8, true) !== view.getUint32(directory + 24, true)
   )
     throw new Error("STATE_LOAD_FAILED");
+  const originalSize = view.getUint32(directory + 24, true);
+  if (originalSize > MAX_STATE_BYTES) throw new Error("STATE_LOAD_FAILED");
+  if (method === 8) {
+    const compressed = bytes.subarray(
+      30 + view.getUint16(26, true) + view.getUint16(28, true),
+      dataEnd,
+    );
+    // fflate trusts the ZIP size and may truncate output. Bound and verify actual inflation first.
+    // The pinned Node typings omit the documented info:true return shape.
+    const inflated = inflateRawSync(compressed, {
+      maxOutputLength: MAX_STATE_BYTES,
+      info: true,
+    }) as unknown as {
+      buffer: Buffer;
+      engine: { bytesWritten: number };
+    };
+    if (
+      inflated.buffer.length !== originalSize ||
+      inflated.engine.bytesWritten !== compressed.length
+    )
+      throw new Error("STATE_LOAD_FAILED");
+  }
   const files = unzipSync(bytes, {
     filter(file) {
       if (file.name !== STATE_FILE_NAME || file.originalSize > MAX_STATE_BYTES)
