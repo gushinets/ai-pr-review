@@ -58,3 +58,28 @@ it.each(["pre", "script", "style", "textarea", "div", "details"])(
     expect(parsePrMetadata(title, `<${tag}>\n${body}\n</${tag}>`)).toBeNull();
   },
 );
+
+it.each([
+  `## Linear issue\n\`\n${url}\n\``,
+  `## Linear issue\n\`\`first line\n\` nested tick ${url}\nlast line\`\``,
+])("ignores issue URLs inside multiline code spans %j", (value) => {
+  expect(parsePrMetadata(title, value)).toBeNull();
+});
+
+it.each([
+  `## Linear issue\n[Ticket](${url}(evil))`,
+  `## Linear issue\n[Ticket](${url}/payment-validation(evil))`,
+  `## Linear issue\n[Ticket](${url}((nested)))`,
+])("rejects the complete invalid link destination %j", (value) => {
+  expect(parsePrMetadata(title, value)).toBeNull();
+});
+
+it.each([
+  `## Linear issue\n${url}`,
+  `## Linear issue\n<${url}>`,
+  `## Linear issue\n[Ticket](${url})`,
+  `## Linear issue\n[Ticket](${url}/payment-validation)`,
+  `## Linear issue\n\`\`unclosed\n${url}\n\``,
+])("retains canonical and slug URL forms outside code spans %j", (value) => {
+  expect(parsePrMetadata(title, value)).toBe("ANY-451");
+});

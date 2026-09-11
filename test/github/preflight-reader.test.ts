@@ -238,6 +238,9 @@ describe("Octokit adapter", () => {
       new Octokit({
         request: { fetch },
         log: {
+          debug: () => {},
+          info: () => {},
+          warn: console.warn,
           error: (message: string) => {
             errorLogs.push(message);
           },
