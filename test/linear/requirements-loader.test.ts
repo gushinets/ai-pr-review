@@ -32,7 +32,13 @@ function loader(client: LinearClientLike, token = vi.fn(async () => "temporary-t
   };
 }
 
-afterEach(() => vi.restoreAllMocks());
+const nativeFetch = globalThis.fetch;
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  expect(globalThis.fetch).toBe(nativeFetch);
+});
 
 describe("LinearRequirementsLoader", () => {
   it("loads normalized normative fields with zero comments using a fresh token", async () => {
