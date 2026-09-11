@@ -4,6 +4,45 @@ import { CENTRAL_CONFIG } from "../config/central-config.js";
 import { ConfigError } from "../config/repo-config.js";
 import type { AssociatedPullRequest, ChangedFile, GitHubReader } from "./preflight-reader.js";
 
+export interface GitHubCheckRun {
+  id: number;
+  name: string;
+  headSha: string;
+  status: string;
+  conclusion: string | null;
+  detailsUrl: string | null;
+  externalId: string | null;
+  appId: number | null;
+}
+export interface GitHubCommitStatus {
+  id: number;
+  context: string;
+  state: string;
+  targetUrl: string | null;
+}
+export interface GitHubWorkflowJob {
+  id: number;
+  runId: number;
+  headSha: string;
+  checkRunUrl: string;
+}
+export interface GithubReadClient extends GitHubReader {
+  getPullRequestDiff(repository: string, prNumber: number): Promise<string>;
+  listCheckRuns(repository: string, headSha: string): Promise<GitHubCheckRun[]>;
+  getCommitStatuses(
+    repository: string,
+    headSha: string,
+  ): Promise<{ sha: string; statuses: GitHubCommitStatus[] }>;
+  listWorkflowRuns(repository: string, headSha: string): Promise<{ id: number; headSha: string }[]>;
+  listWorkflowJobs(repository: string, runId: number): Promise<GitHubWorkflowJob[]>;
+  downloadJobLog(repository: string, jobId: number): Promise<string>;
+}
+
+function completePage(total: number, received: number, pageSize: number): boolean {
+  if (!Number.isSafeInteger(total) || total < received || (received < total && pageSize < 100))
+    throw new Error("Incomplete GitHub evidence response");
+  return received === total;
+}
 function isTransient(error: unknown): boolean {
   if (typeof error !== "object" || error === null) return false;
   if ("status" in error && typeof error.status === "number")
@@ -41,8 +80,134 @@ function repoParams(repository: string) {
 }
 
 // Only explicit GET endpoints are exposed. Retry scope is a single read/page.
-export function createGitHubClient(octokit: Octokit): GitHubReader {
+export function createGitHubClient(octokit: Octokit): GithubReadClient {
   return {
+    async getPullRequestDiff(repository, prNumber) {
+      const { data } = await retryRead(() =>
+        octokit.rest.pulls.get({
+          ...repoParams(repository),
+          pull_number: prNumber,
+          mediaType: { format: "diff" },
+        }),
+      );
+      if (typeof data !== "string") throw new Error("Invalid GitHub diff response");
+      return data;
+    },
+    async listCheckRuns(repository, headSha) {
+      const checks: GitHubCheckRun[] = [];
+      let total: number | undefined;
+      for (let page = 1; ; page++) {
+        const { data } = await retryRead(() =>
+          octokit.rest.checks.listForRef({
+            ...repoParams(repository),
+            ref: headSha,
+            filter: "latest",
+            per_page: 100,
+            page,
+          }),
+        );
+        if (total !== undefined && total !== data.total_count)
+          throw new Error("Changed GitHub evidence response");
+        total = data.total_count;
+        checks.push(
+          ...data.check_runs.map((check) => ({
+            id: check.id,
+            name: check.name,
+            headSha: check.head_sha,
+            status: check.status,
+            conclusion: check.conclusion,
+            detailsUrl: check.details_url,
+            externalId: check.external_id,
+            appId: check.app?.id ?? null,
+          })),
+        );
+        if (completePage(total, checks.length, data.check_runs.length)) return checks;
+      }
+    },
+    async getCommitStatuses(repository, headSha) {
+      const statuses: GitHubCommitStatus[] = [];
+      let total: number | undefined;
+      for (let page = 1; ; page++) {
+        const { data } = await retryRead(() =>
+          octokit.rest.repos.getCombinedStatusForRef({
+            ...repoParams(repository),
+            ref: headSha,
+            per_page: 100,
+            page,
+          }),
+        );
+        if (data.sha !== headSha || (total !== undefined && total !== data.total_count))
+          throw new Error("Changed GitHub evidence response");
+        total = data.total_count;
+        statuses.push(
+          ...data.statuses.map((status) => ({
+            id: status.id,
+            context: status.context,
+            state: status.state,
+            targetUrl: status.target_url,
+          })),
+        );
+        if (completePage(total, statuses.length, data.statuses.length))
+          return { sha: data.sha, statuses };
+      }
+    },
+    async listWorkflowRuns(repository, headSha) {
+      const runs: { id: number; headSha: string }[] = [];
+      let total: number | undefined;
+      for (let page = 1; ; page++) {
+        const { data } = await retryRead(() =>
+          octokit.rest.actions.listWorkflowRunsForRepo({
+            ...repoParams(repository),
+            head_sha: headSha,
+            per_page: 100,
+            page,
+          }),
+        );
+        if (total !== undefined && total !== data.total_count)
+          throw new Error("Changed GitHub evidence response");
+        total = data.total_count;
+        runs.push(...data.workflow_runs.map((run) => ({ id: run.id, headSha: run.head_sha })));
+        if (completePage(total, runs.length, data.workflow_runs.length)) return runs;
+      }
+    },
+    async listWorkflowJobs(repository, runId) {
+      const jobs: GitHubWorkflowJob[] = [];
+      let total: number | undefined;
+      for (let page = 1; ; page++) {
+        const { data } = await retryRead(() =>
+          octokit.rest.actions.listJobsForWorkflowRun({
+            ...repoParams(repository),
+            run_id: runId,
+            filter: "latest",
+            per_page: 100,
+            page,
+          }),
+        );
+        if (total !== undefined && total !== data.total_count)
+          throw new Error("Changed GitHub evidence response");
+        total = data.total_count;
+        jobs.push(
+          ...data.jobs.map((job) => ({
+            id: job.id,
+            runId: job.run_id,
+            headSha: job.head_sha,
+            checkRunUrl: job.check_run_url,
+          })),
+        );
+        if (completePage(total, jobs.length, data.jobs.length)) return jobs;
+      }
+    },
+    async downloadJobLog(repository, jobId) {
+      // The per-job endpoint redirects to plaintext; only whole-run log downloads are ZIPs.
+      const { data } = await retryRead(() =>
+        octokit.rest.actions.downloadJobLogsForWorkflowRun({
+          ...repoParams(repository),
+          job_id: jobId,
+        }),
+      );
+      if (typeof data !== "string") throw new Error("Invalid GitHub job log response");
+      return data;
+    },
     async getWorkflowRun(repository, runId) {
       const { data } = await retryRead(() =>
         octokit.rest.actions.getWorkflowRun({ ...repoParams(repository), run_id: runId }),
