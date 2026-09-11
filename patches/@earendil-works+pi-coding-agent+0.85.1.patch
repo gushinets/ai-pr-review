@@ -1,0 +1,107 @@
+diff --git a/node_modules/@earendil-works/pi-coding-agent/dist/core/tools/path-utils.js b/node_modules/@earendil-works/pi-coding-agent/dist/core/tools/path-utils.js
+index 47382b5..63d20eb 100644
+--- a/node_modules/@earendil-works/pi-coding-agent/dist/core/tools/path-utils.js
++++ b/node_modules/@earendil-works/pi-coding-agent/dist/core/tools/path-utils.js
+@@ -1,4 +1,5 @@
+-import { accessSync, constants } from "node:fs";
++import { accessSync, constants, lstatSync, realpathSync } from "node:fs";
++import { dirname, isAbsolute, relative, sep } from "node:path";
+ import { access } from "node:fs/promises";
+ import { normalizePath, resolvePath } from "../../utils/paths.js";
+ const NARROW_NO_BREAK_SPACE = "\u202F";
+@@ -39,8 +40,40 @@ export function expandPath(filePath) {
+  * Resolve a path relative to the given cwd.
+  * Handles ~ expansion and absolute paths.
+  */
++function assertReviewPath(filePath, cwd) {
++    const configuredRoot = process.env.AI_PR_REVIEW_ROOT;
++    if (configuredRoot === undefined) return filePath;
++    const denied = () => new Error(`ACCESS_DENIED_OUTSIDE_REVIEW_ROOT: ${filePath}`);
++    if (!configuredRoot) throw denied();
++    const root = realpathSync(resolvePath(configuredRoot));
++    const check = (candidate) => {
++        const rel = relative(root, candidate);
++        if (rel === ".." || rel.startsWith(`..${sep}`) || isAbsolute(rel)) throw denied();
++    };
++    check(realpathSync(resolvePath(cwd)));
++    check(filePath);
++    let ancestor = filePath;
++    while (true) {
++        try {
++            lstatSync(ancestor);
++            break;
++        } catch (error) {
++            if (error.code !== "ENOENT" && error.code !== "ENOTDIR") throw error;
++            const parent = dirname(ancestor);
++            if (parent === ancestor) throw denied();
++            ancestor = parent;
++        }
++    }
++    // Do not walk past dangling symlinks or otherwise unverifiable existing entries.
++    let canonicalAncestor;
++    try { canonicalAncestor = realpathSync(ancestor); }
++    catch { throw denied(); }
++    check(canonicalAncestor);
++    return filePath;
++}
+ export function resolveToCwd(filePath, cwd) {
+-    return resolvePath(filePath, cwd, { normalizeUnicodeSpaces: true, stripAtPrefix: true });
++    const base = process.env.AI_PR_REVIEW_ROOT === undefined ? cwd : realpathSync(resolvePath(cwd));
++    return assertReviewPath(resolvePath(filePath, base, { normalizeUnicodeSpaces: true, stripAtPrefix: true }), cwd);
+ }
+ export function resolveReadPath(filePath, cwd) {
+     const resolved = resolveToCwd(filePath, cwd);
+@@ -50,22 +83,22 @@ export function resolveReadPath(filePath, cwd) {
+     // Try macOS AM/PM variant (narrow no-break space before AM/PM)
+     const amPmVariant = tryMacOSScreenshotPath(resolved);
+     if (amPmVariant !== resolved && fileExists(amPmVariant)) {
+-        return amPmVariant;
++        return assertReviewPath(amPmVariant, cwd);
+     }
+     // Try NFD variant (macOS stores filenames in NFD form)
+     const nfdVariant = tryNFDVariant(resolved);
+     if (nfdVariant !== resolved && fileExists(nfdVariant)) {
+-        return nfdVariant;
++        return assertReviewPath(nfdVariant, cwd);
+     }
+     // Try curly quote variant (macOS uses U+2019 in screenshot names)
+     const curlyVariant = tryCurlyQuoteVariant(resolved);
+     if (curlyVariant !== resolved && fileExists(curlyVariant)) {
+-        return curlyVariant;
++        return assertReviewPath(curlyVariant, cwd);
+     }
+     // Try combined NFD + curly quote (for French macOS screenshots like "Capture d'écran")
+     const nfdCurlyVariant = tryCurlyQuoteVariant(nfdVariant);
+     if (nfdCurlyVariant !== resolved && fileExists(nfdCurlyVariant)) {
+-        return nfdCurlyVariant;
++        return assertReviewPath(nfdCurlyVariant, cwd);
+     }
+     return resolved;
+ }
+@@ -77,22 +110,22 @@ export async function resolveReadPathAsync(filePath, cwd) {
+     // Try macOS AM/PM variant (narrow no-break space before AM/PM)
+     const amPmVariant = tryMacOSScreenshotPath(resolved);
+     if (amPmVariant !== resolved && (await pathExists(amPmVariant))) {
+-        return amPmVariant;
++        return assertReviewPath(amPmVariant, cwd);
+     }
+     // Try NFD variant (macOS stores filenames in NFD form)
+     const nfdVariant = tryNFDVariant(resolved);
+     if (nfdVariant !== resolved && (await pathExists(nfdVariant))) {
+-        return nfdVariant;
++        return assertReviewPath(nfdVariant, cwd);
+     }
+     // Try curly quote variant (macOS uses U+2019 in screenshot names)
+     const curlyVariant = tryCurlyQuoteVariant(resolved);
+     if (curlyVariant !== resolved && (await pathExists(curlyVariant))) {
+-        return curlyVariant;
++        return assertReviewPath(curlyVariant, cwd);
+     }
+     // Try combined NFD + curly quote (for French macOS screenshots like "Capture d'écran")
+     const nfdCurlyVariant = tryCurlyQuoteVariant(nfdVariant);
+     if (nfdCurlyVariant !== resolved && (await pathExists(nfdCurlyVariant))) {
+-        return nfdCurlyVariant;
++        return assertReviewPath(nfdCurlyVariant, cwd);
+     }
+     return resolved;
+ }
