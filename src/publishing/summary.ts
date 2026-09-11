@@ -62,10 +62,23 @@ export function buildMachineCheck(state: ReviewStateV1): MachineCheck {
     },
   };
 }
+export function calibrationMarker(state: ReviewStateV1): string {
+  const identity = createHash("sha256")
+    .update(
+      JSON.stringify([
+        buildMachineCheck(state).external_id,
+        state.telemetry.started_at,
+        state.telemetry.finished_at,
+      ]),
+    )
+    .digest("hex");
+  return `<!-- ai-pr-review-calibration:v1:${identity} -->`;
+}
 export function renderSummary(state: ReviewStateV1): string {
   const telemetry = state.telemetry;
   return [
     CENTRAL_CONFIG.summaryMarker,
+    calibrationMarker(state),
     `## ${CENTRAL_CONFIG.checkName}`,
     renderText(
       `Verdict: ${state.outcome}\nReviewed head SHA: ${state.attempt_identity.head_sha}\nLinear issue: ${state.lineage.linear_issue ?? "unknown"}\n${ciCounts(state)}\n${counts(state)}${state.unable_reason === null ? "" : `\nUnable reason: ${state.unable_reason}`}`,
@@ -106,7 +119,9 @@ export function renderSummary(state: ReviewStateV1): string {
       renderText(`Model ID: ${model.model_id}`, 450),
       renderText(`Effective reasoning: ${model.effective_reasoning ?? "unknown"}`, 450),
     ]),
-    "Stage 1 calibration: maintainer feedback — 👍 correct / 👎 incorrect.",
+    "Stage 1 calibration: users with write, maintain or admin permission may react to this summary: 👍 correct / 👎 incorrect PR-level verdict. On blocking inline findings: 👍 finding valid / 👎 false positive. Feedback never changes the verdict. After a summary update, remove and re-add your reaction to label this reviewed head.",
+    "If a human finds a material blocker after AI PASS, post a PR comment with this exact marker:",
+    renderText(`<!-- ai-pr-review-material-miss:v1:${state.attempt_identity.head_sha} -->`),
   ]
     .join("\n\n")
     .replace(`${CENTRAL_CONFIG.summaryMarker}\n\n`, `${CENTRAL_CONFIG.summaryMarker}\n`);

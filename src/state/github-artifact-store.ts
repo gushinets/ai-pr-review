@@ -153,6 +153,54 @@ function parseZip(bytes: Uint8Array): ReviewStateV1 {
   return parseReviewState(decode.decode(content));
 }
 
+type WorkflowRun = Awaited<ReturnType<Octokit["rest"]["actions"]["getWorkflowRun"]>>["data"];
+
+export function trustedWorkflowPin(
+  run: WorkflowRun,
+  repository: string,
+  defaultBranch: string,
+): string | null {
+  if (
+    run.repository.full_name !== repository ||
+    run.path !== ".github/workflows/ai-pr-review.yml" ||
+    run.head_branch !== defaultBranch ||
+    (run.event !== "workflow_run" && run.event !== "workflow_dispatch")
+  )
+    return null;
+  const references = (run.referenced_workflows ?? []).filter((reference) =>
+    reference.path.startsWith(`${CENTRAL_WORKFLOW}@`),
+  );
+  if (references.length !== 1) return null;
+  const reference = references[0]!;
+  const pin = reference.path.slice(CENTRAL_WORKFLOW.length + 1);
+  return /^[0-9a-f]{40}$/i.test(pin) && reference.sha === pin ? pin : null;
+}
+
+export async function readCanonicalArtifact(
+  octokit: Octokit,
+  repository: string,
+  artifactId: number,
+  pin: string,
+): Promise<ReviewStateV1 | null> {
+  const [owner, repo] = repository.split("/") as [string, string];
+  try {
+    const { data } = await retryRead(() =>
+      octokit.rest.actions.downloadArtifact({
+        owner,
+        repo,
+        artifact_id: artifactId,
+        archive_format: "zip",
+        request: { parseSuccessResponseBody: false },
+      }),
+    );
+    const state = parseZip(await readZip(data));
+    if (state.attempt_identity.engine_sha !== pin) throw new Error("STATE_LOAD_FAILED");
+    return state;
+  } catch (error) {
+    if (missing(error)) return null;
+    throw new Error("STATE_LOAD_FAILED");
+  }
+}
 export class GitHubArtifactStateStore {
   // defaultBranch comes from trusted GitHub repository metadata, never PR configuration.
   constructor(
@@ -222,32 +270,17 @@ export class GitHubArtifactStateStore {
               run_id: runId,
             }),
           );
-          if (
-            run.id !== runId ||
-            run.repository.full_name !== identity.repository ||
-            run.path !== ".github/workflows/ai-pr-review.yml" ||
-            run.head_branch !== this.trusted.defaultBranch ||
-            (run.event !== "workflow_run" && run.event !== "workflow_dispatch")
-          )
-            continue;
-          const references = (run.referenced_workflows ?? []).filter((reference) =>
-            reference.path.startsWith(`${CENTRAL_WORKFLOW}@`),
+          if (run.id !== runId) continue;
+          const pin = trustedWorkflowPin(run, identity.repository, this.trusted.defaultBranch);
+          if (pin === null) continue;
+          const loaded = await readCanonicalArtifact(
+            this.octokit,
+            identity.repository,
+            artifact.id,
+            pin,
           );
-          if (references.length !== 1) continue;
-          const reference = references[0]!;
-          const pin = reference.path.slice(CENTRAL_WORKFLOW.length + 1);
-          if (!/^[0-9a-f]{40}$/i.test(pin) || reference.sha !== pin) continue;
-          const { data } = await retryRead(() =>
-            this.octokit.rest.actions.downloadArtifact({
-              owner,
-              repo,
-              artifact_id: artifact.id,
-              archive_format: "zip",
-              request: { parseSuccessResponseBody: false },
-            }),
-          );
-          state = parseZip(await readZip(data));
-          if (state.attempt_identity.engine_sha !== pin) throw new Error("STATE_LOAD_FAILED");
+          if (loaded === null) continue;
+          state = loaded;
         } catch (error) {
           if (missing(error)) continue;
           throw error;

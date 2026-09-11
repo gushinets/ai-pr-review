@@ -262,3 +262,20 @@ it("bounds escaped UTF-8 summary while retaining verdict, history disclosure and
   expect(body).not.toContain("\ud83d</pre>");
   expect(value).toEqual(original);
 });
+
+it("pins feedback to a canonical attempt and explains maintainer labels without changing verdict", () => {
+  const first = state();
+  const body = renderSummary(first);
+  expect(body).toContain("write, maintain or admin");
+  expect(body).toContain("PR-level verdict");
+  expect(body).toContain("finding valid");
+  expect(body).toContain("false positive");
+  expect(body).toContain(
+    `&lt;!-- ai-pr-review-material-miss:v1:${first.attempt_identity.head_sha} --&gt;`,
+  );
+  const marker = body.match(/<!-- ai-pr-review-calibration:v1:[a-f0-9]{64} -->/);
+  expect(marker).not.toBeNull();
+  first.telemetry.started_at = "2026-09-11T01:00:00Z";
+  expect(renderSummary(first)).not.toContain(marker![0]);
+  expect(body).toContain("Verdict: PASS");
+});
