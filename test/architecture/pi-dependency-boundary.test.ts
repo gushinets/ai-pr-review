@@ -15,7 +15,12 @@ function violations(file: string, source: string): string[] {
     const specifier =
       ts.isImportDeclaration(node) || ts.isExportDeclaration(node)
         ? node.moduleSpecifier
-        : ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword
+        : ts.isCallExpression(node) &&
+            (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
+              (ts.isPropertyAccessExpression(node.expression) &&
+                ts.isMetaProperty(node.expression.expression) &&
+                node.expression.expression.keywordToken === ts.SyntaxKind.ImportKeyword &&
+                node.expression.name.text === "resolve"))
           ? node.arguments[0]
           : undefined;
     if (
@@ -54,6 +59,15 @@ it("limits Pi imports to approved runtime directories", () => {
   ]);
 });
 
+it("checks the literal public ESM resolver used by the Pi loader", () => {
+  const source = `const url = import.meta.resolve("@earendil-works/pi-coding-agent");
+    await import(url);`;
+  expect(violations("src/config/model-studio.ts", source)).toEqual([
+    "src/config/model-studio.ts: @earendil-works/pi-coding-agent",
+  ]);
+  expect(violations("src/sandbox/pi-confinement-contract.ts", source)).toEqual([]);
+  expect(violations("src/review-engine/rejudge-extension.ts", source)).toEqual([]);
+});
 it("scans every TypeScript source import", async () => {
   const repo = fileURLToPath(new URL("../../", import.meta.url));
   async function scan(dir: string): Promise<string[]> {
