@@ -261,3 +261,64 @@ describe("normalized diff metadata", () => {
     });
   });
 });
+
+describe("unquoted filenames containing the diff separator", () => {
+  it("loads exact-head metadata and anchors for dir b/name.ts", async () => {
+    const github = reader({
+      getPullRequestDiff: async () => patch.replaceAll("src/a.ts", "dir b/name.ts"),
+      listChangedFiles: async () => [
+        { filename: "dir b/name.ts", status: "modified", additions: 2, deletions: 1 },
+      ],
+    });
+    const { index } = await loadPrDiff(github, "o/r", 7, head);
+    expect(index.contains({ path: "dir b/name.ts", line: 11, side: "LEFT" })).toBe(true);
+    expect(index.contains({ path: "dir b/name.ts", line: 12, side: "RIGHT" })).toBe(true);
+    expect(index.contains({ path: "name.ts", line: 12, side: "RIGHT" })).toBe(false);
+  });
+  it.each([
+    { header: "--- /dev/null\n+++ b/dir b/name.ts\t\n@@ -0,0 +1 @@\n+new", side: "RIGHT" },
+    { header: "--- a/dir b/name.ts\t\n+++ /dev/null\n@@ -1 +0,0 @@\n-old", side: "LEFT" },
+  ] as const)("uses the non-null file header for $side-only changes", ({ header, side }) => {
+    const index = buildDiffIndex(`diff --git a/dir b/name.ts b/dir b/name.ts\n${header}`);
+    expect(index.contains({ path: "dir b/name.ts", line: 1, side })).toBe(true);
+    expect(index.contains({ path: "name.ts", line: 1, side })).toBe(false);
+  });
+  it("uses rename headers and the current path for both sides of a changed rename", () => {
+    const index = buildDiffIndex(
+      "diff --git a/old b/name.ts b/new b/name.ts\nrename from old b/name.ts\nrename to new b/name.ts\n--- a/old b/name.ts\t\n+++ b/new b/name.ts\t\n@@ -1 +1 @@\n-old\n+new",
+    );
+    expect(index.contains({ path: "new b/name.ts", line: 1, side: "LEFT" })).toBe(true);
+    expect(index.contains({ path: "new b/name.ts", line: 1, side: "RIGHT" })).toBe(true);
+    expect(index.contains({ path: "old b/name.ts", line: 1, side: "LEFT" })).toBe(false);
+  });
+  it("resolves a pure rename from its rename headers", () => {
+    const index = buildDiffIndex(
+      "diff --git a/old b/name.ts b/new b/name.ts\nsimilarity index 100%\nrename from old b/name.ts\nrename to new b/name.ts",
+    );
+    expect(index.contains({ path: "new b/name.ts", line: 1, side: "RIGHT" })).toBe(false);
+  });
+  it("matches mode-only metadata when no separate file headers exist", async () => {
+    const github = reader({
+      getPullRequestDiff: async () =>
+        "diff --git a/dir b/name.ts b/dir b/name.ts\nold mode 100644\nnew mode 100755",
+      listChangedFiles: async () => [
+        { filename: "dir b/name.ts", status: "modified", additions: 0, deletions: 0 },
+      ],
+    });
+    const get = github.getPullRequest;
+    github.getPullRequest = async (repo, number) => ({
+      ...(await get(repo, number)),
+      additions: 0,
+      deletions: 0,
+    });
+    const { index } = await loadPrDiff(github, "o/r", 7, head);
+    expect(index.contains({ path: "dir b/name.ts", line: 1, side: "RIGHT" })).toBe(false);
+  });
+  it.each([
+    "diff --git a/other b/name.ts b/dir b/name.ts\n--- a/dir b/name.ts\n+++ b/dir b/name.ts\n@@ -1 +1 @@\n-old\n+new",
+    "diff --git a/old b/name.ts b/new b/name.ts\nrename from old b/name.ts\nrename to other b/name.ts",
+    "diff --git a/dir b/../name.ts b/dir b/../name.ts\n--- a/dir b/../name.ts\n+++ b/dir b/../name.ts\n@@ -1 +1 @@\n-old\n+new",
+  ])("still rejects conflicting or unsafe paths %#", (diff) =>
+    expect(() => buildDiffIndex(diff)).toThrow(),
+  );
+});

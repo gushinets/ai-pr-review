@@ -75,6 +75,49 @@ function prefixedPath(value: string, prefix: "a/" | "b/"): string {
   if (!decoded.startsWith(prefix)) throw new DiffError();
   return repositoryPath(decoded.slice(2));
 }
+function diffPaths(lines: readonly string[], start: number): { oldPath: string; path: string } {
+  const header = lines[start]!.slice("diff --git ".length);
+  let candidates: { oldPath: string; path: string }[] = [];
+  for (const separator of header.matchAll(/ (?=b\/|"b\/)/g)) {
+    const oldToken = header.slice(0, separator.index);
+    const newToken = header.slice(separator.index + 1);
+    const completeToken = (token: string) =>
+      token.startsWith('"') ? /^"(?:[^"\\]|\\.)*"$/.test(token) : !token.includes('"');
+    if (!completeToken(oldToken) || !completeToken(newToken)) continue;
+    try {
+      candidates.push({
+        oldPath: prefixedPath(oldToken, "a/"),
+        path: prefixedPath(newToken, "b/"),
+      });
+    } catch {
+      // A separator inside a filename is not necessarily a valid pair of Git paths.
+    }
+  }
+  // File/rename headers disambiguate spaces in unquoted diff --git paths.
+  for (let i = start + 1; i < lines.length; i++) {
+    const line = lines[i]!;
+    if (line.startsWith("diff --git ") || line.startsWith("@@")) break;
+    const fileHeader = /^(---|\+\+\+) (.+?)\t?$/.exec(line);
+    const renameHeader = /^(?:rename|copy) (from|to) (.+)$/.exec(line);
+    if (fileHeader && fileHeader[2] !== "/dev/null") {
+      const old = fileHeader[1] === "---";
+      const path = prefixedPath(fileHeader[2]!, old ? "a/" : "b/");
+      candidates = candidates.filter(
+        (candidate) => (old ? candidate.oldPath : candidate.path) === path,
+      );
+    } else if (renameHeader) {
+      const path = repositoryPath(pathValue(renameHeader[2]!));
+      candidates = candidates.filter(
+        (candidate) => (renameHeader[1] === "from" ? candidate.oldPath : candidate.path) === path,
+      );
+    }
+  }
+  // Mode-only and binary sections may have no separate file headers or rename.
+  if (candidates.length > 1)
+    candidates = candidates.filter(({ oldPath, path }) => oldPath === path);
+  if (candidates.length !== 1) throw new DiffError();
+  return candidates[0]!;
+}
 interface ParsedFile {
   path: string;
   oldPath: string;
@@ -118,7 +161,7 @@ function parseDiff(diff: string): { index: DiffIndex; files: Map<string, ParsedF
   };
   const lines = diff.split("\n");
   if (lines.at(-1) === "") lines.pop();
-  for (const line of lines) {
+  for (const [lineNumber, line] of lines.entries()) {
     if (line === "\\ No newline at end of file" && bodySeen) {
       if (newlineMarker) throw new DiffError();
       newlineMarker = true;
@@ -145,10 +188,7 @@ function parseDiff(diff: string): { index: DiffIndex; files: Map<string, ParsedF
     finishHunk();
     if (line.startsWith("diff --git ")) {
       finishFile();
-      const match = /^diff --git ("(?:[^"\\]|\\.)*"|a\/.+) ("(?:[^"\\]|\\.)*"|b\/.+)$/.exec(line);
-      if (!match) throw new DiffError();
-      const oldPath = prefixedPath(match[1]!, "a/");
-      const path = prefixedPath(match[2]!, "b/");
+      const { oldPath, path } = diffPaths(lines, lineNumber);
       if (files.has(path)) throw new DiffError();
       file = { path, oldPath, additions: 0, deletions: 0, left: new Set(), right: new Set() };
       files.set(path, file);
