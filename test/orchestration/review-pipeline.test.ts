@@ -13,7 +13,7 @@ import type { PreflightResult } from "../../src/orchestration/preflight-pipeline
 import type { JudgeResultV1 } from "../../src/contracts/judge-result.js";
 import type { ReviewStateV1 } from "../../src/contracts/review-state.js";
 import type { StateDiscovery } from "../../src/state/github-artifact-store.js";
-import { buildReviewState } from "../../src/state/review-state.js";
+import { buildReviewState, parseReviewState } from "../../src/state/review-state.js";
 import { type RejudgeEngine, RejudgeEngineError } from "../../src/review-engine/rejudge-engine.js";
 import { UNABLE_REASONS } from "../../src/contracts/failure-reasons.js";
 
@@ -197,7 +197,15 @@ it.each([pass, block])(
     );
     expect(result).toMatchObject({
       kind: "STATE_READY",
-      state: { outcome: judge.findings.length ? "BLOCK" : "PASS", judge_result: judge },
+      state: {
+        outcome: judge.findings.length ? "BLOCK" : "PASS",
+        judge_result: {
+          ...judge,
+          summary:
+            judge.summary +
+            "\n\nNo compatible prior review was available; historical verification was not performed.",
+        },
+      },
     });
     expect(f.calls.indexOf("state")).toBeLessThan(f.calls.indexOf("linear"));
     expect(f.calls.indexOf("linear")).toBeLessThan(f.calls.indexOf("AGENTS.md"));
@@ -726,7 +734,10 @@ it("sanitizes quoted private Linear and failed-log evidence before assigning fin
   expect(result).toMatchObject({
     state: {
       outcome: "BLOCK",
-      judge_result: { summary: "[REDACTED PRIVATE SOURCE]" },
+      judge_result: {
+        summary:
+          "[REDACTED PRIVATE SOURCE]\n\nNo compatible prior review was available; historical verification was not performed.",
+      },
       findings: [{ evidence: "[REDACTED PRIVATE SOURCE]" }],
     },
   });
@@ -891,4 +902,140 @@ it("rejects closure current_location outside reviewed evidence without a closure
     state: { outcome: "UNABLE_TO_REVIEW", unable_reason: "CLOSURE_RESULT_INVALID" },
   });
   expect(f.engine.resume).toHaveBeenCalledTimes(1);
+});
+
+it.each([pass, block])(
+  "retains a no-history disclosure in serialized canonical PASS/BLOCK state",
+  async (judge) => {
+    const f = await fixture();
+    f.engine.fresh.mockResolvedValue({ answer: JSON.stringify(judge), run_id: runId });
+    const result = await runReviewPipeline(
+      { preflight: f.preflight, workDir: f.workDir },
+      f.prepare,
+      f.execute,
+    );
+    expect(result.kind).toBe("STATE_READY");
+    if (result.kind !== "STATE_READY") return;
+    const saved = parseReviewState(JSON.stringify(result.state));
+    expect(saved.outcome).toBe(judge.findings.length ? "BLOCK" : "PASS");
+    expect(saved.judge_result?.summary).toBe(
+      judge.summary +
+        "\n\nNo compatible prior review was available; historical verification was not performed.",
+    );
+    expect(saved.judge_result?.findings).toEqual(judge.findings);
+    expect(saved.findings).toEqual(state(f, head, judge).findings);
+    expect(saved.resolution_result).toBeNull();
+    expect(f.engine.resume).not.toHaveBeenCalled();
+  },
+);
+it("persists partial-history disclosure while closing a surviving blocker", async () => {
+  const f = await fixture(),
+    previous = state(f),
+    surviving = previous.findings[0]!;
+  previous.previous_review_head_sha = "e".repeat(40);
+  previous.resolution_result = {
+    schema_version: 1,
+    resolutions: [
+      {
+        previous_finding_id: "expired-finding-id",
+        status: "still_present",
+        confidence: "high",
+        current_location: null,
+        evidence: "Older issue was still present",
+      },
+    ],
+  };
+  f.loadState.mockResolvedValue({ kind: "fresh", previous, history: [previous], rerunnable: null });
+  f.engine.resume.mockResolvedValue({
+    run_id: runId,
+    answer: JSON.stringify({
+      schema_version: 1,
+      resolutions: [
+        {
+          previous_finding_id: surviving.finding_id,
+          status: "still_present",
+          confidence: "high",
+          current_location: null,
+          evidence: "Retained blocker remains",
+        },
+      ],
+    }),
+  });
+  const result = await runReviewPipeline(
+    { preflight: f.preflight, workDir: f.workDir },
+    f.prepare,
+    f.execute,
+  );
+  expect(result.kind).toBe("STATE_READY");
+  if (result.kind !== "STATE_READY") return;
+  const saved = parseReviewState(JSON.stringify(result.state));
+  expect(saved.outcome).toBe("BLOCK");
+  expect(saved.findings).toEqual([]);
+  expect(saved.judge_result?.summary).toBe(
+    pass.summary +
+      "\n\nHistorical verification was incomplete because some prior findings were unavailable.",
+  );
+  expect(saved.resolution_result?.resolutions.map((r) => r.previous_finding_id)).toEqual([
+    surviving.finding_id,
+  ]);
+  expect(f.engine.resume).toHaveBeenCalledTimes(1);
+  expect(f.engine.resume.mock.calls[0]![0].prompt).toContain(surviving.finding_id);
+  expect(f.engine.resume.mock.calls[0]![0].prompt).not.toContain("expired-finding-id");
+});
+it.each([pass, block])(
+  "keeps the summary unchanged when compatible historical evidence is fully available",
+  async (historicalJudge) => {
+    const f = await fixture(),
+      previous = state(f, "d".repeat(40), historicalJudge);
+    f.loadState.mockResolvedValue({
+      kind: "fresh",
+      previous,
+      history: [previous],
+      rerunnable: null,
+    });
+    f.engine.resume.mockResolvedValue({
+      run_id: runId,
+      answer: JSON.stringify({
+        schema_version: 1,
+        resolutions: previous.findings.map((f) => ({
+          previous_finding_id: f.finding_id,
+          status: "resolved",
+          confidence: "high",
+          current_location: null,
+          evidence: "Previous issue has been corrected",
+        })),
+      }),
+    });
+    const result = await runReviewPipeline(
+      { preflight: f.preflight, workDir: f.workDir },
+      f.prepare,
+      f.execute,
+    );
+    expect(result.kind).toBe("STATE_READY");
+    if (result.kind !== "STATE_READY") return;
+    const saved = parseReviewState(JSON.stringify(result.state));
+    expect(saved.outcome).toBe("PASS");
+    expect(saved.judge_result?.summary).toBe(pass.summary);
+  },
+);
+it("keeps the canonical history disclosure after sanitizing private model summary text", async () => {
+  const f = await fixture();
+  f.engine.fresh.mockResolvedValue({
+    run_id: runId,
+    answer: JSON.stringify({ ...pass, summary: "Private task title and qwen-canary" }),
+  });
+  const result = await runReviewPipeline(
+    { preflight: f.preflight, workDir: f.workDir },
+    f.prepare,
+    f.execute,
+  );
+  expect(result.kind).toBe("STATE_READY");
+  if (result.kind !== "STATE_READY") return;
+  const serialized = JSON.stringify(result.state),
+    saved = parseReviewState(serialized);
+  expect(saved.judge_result?.summary).toBe(
+    "[REDACTED PRIVATE SOURCE]\n\nNo compatible prior review was available; historical verification was not performed.",
+  );
+  expect(serialized).not.toMatch(/Private task title|qwen-canary/);
+  expect(saved.outcome).toBe("PASS");
 });

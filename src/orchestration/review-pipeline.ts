@@ -466,9 +466,10 @@ async function readPrepared(input: ReviewInput): Promise<{
 function previousBlockers(
   history: ReviewStateV1[],
   warn: (message: string) => void,
-): ReviewFindingV1[] {
+): { blockers: ReviewFindingV1[]; availability: "unavailable" | "incomplete" | "complete" } {
   const previous = history[0];
-  if (!previous) return [];
+  if (!previous) return { blockers: [], availability: "unavailable" };
+  let availability: "incomplete" | "complete" = "complete";
   const blockers = new Map(
     previous.findings.filter((f) => f.severity === "blocking").map((f) => [f.finding_id, f]),
   );
@@ -496,9 +497,12 @@ function previousBlockers(
         publication_location: null,
         evidence: resolution.evidence,
       });
-    else warn("HISTORICAL_VERIFICATION_UNAVAILABLE");
+    else {
+      availability = "incomplete";
+      warn("HISTORICAL_VERIFICATION_UNAVAILABLE");
+    }
   }
-  return [...blockers.values()];
+  return { blockers: [...blockers.values()], availability };
 }
 
 export async function executeReview(
@@ -570,7 +574,17 @@ export async function executeReview(
       input.preflight.review_identity!,
       diff,
     );
-    const blockers = previousBlockers(prepared.history, dependencies.warn ?? (() => {}));
+    const { blockers, availability } = previousBlockers(
+      prepared.history,
+      dependencies.warn ?? (() => {}),
+    );
+    if (availability !== "complete") {
+      const disclosure =
+        availability === "unavailable"
+          ? "No compatible prior review was available; historical verification was not performed."
+          : "Historical verification was incomplete because some prior findings were unavailable.";
+      state.judge_result.summary += `\n\n${disclosure}`;
+    }
     if (blockers.length) {
       state.previous_review_head_sha = prepared.history[0]!.attempt_identity.head_sha;
       state.telemetry.closure_used = true;
