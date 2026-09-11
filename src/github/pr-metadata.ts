@@ -59,13 +59,13 @@ export function parsePrMetadata(title: string, body: string | null): string | nu
   const urls: string[] = [];
   for (const match of rendered.matchAll(/https?:\/\//g)) {
     const start = match.index;
-    const linkDestination = /\]\([ \t\n]*$/.test(rendered.slice(0, start));
+    const angleDestination = rendered[start - 1] === "<";
     let end = start;
     let parentheses = 0;
     for (; end < rendered.length; end++) {
       const character = rendered[end]!;
       if (/[\s<>`]/.test(character)) break;
-      if (linkDestination && character === ")" && parentheses === 0) break;
+      if (!angleDestination && character === ")" && parentheses === 0) break;
       if (character === "(") parentheses++;
       if (character === ")") parentheses--;
     }

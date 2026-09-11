@@ -83,3 +83,12 @@ it.each([
 ])("retains canonical and slug URL forms outside code spans %j", (value) => {
   expect(parsePrMetadata(title, value)).toBe("ANY-451");
 });
+
+it("keeps unmatched closing parenthesis punctuation outside a bare URL", () => {
+  expect(parsePrMetadata(title, `## Linear issue\n(${url})`)).toBe("ANY-451");
+  expect(parsePrMetadata(title, `## Linear issue\n${url}(evil)`)).toBeNull();
+});
+
+it("retains unmatched parentheses inside explicit angle destinations", () => {
+  expect(parsePrMetadata(title, `## Linear issue\n<${url})evil>`)).toBeNull();
+});
