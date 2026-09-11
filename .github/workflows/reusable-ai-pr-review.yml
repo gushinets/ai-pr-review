@@ -1,0 +1,246 @@
+name: AI PR Review
+on:
+  workflow_call:
+    inputs:
+      mode:
+        required: true
+        type: string
+      triggering_run_id:
+        required: false
+        type: string
+        default: ""
+      pr_number:
+        required: false
+        type: number
+        default: 0
+      alibaba_workspace_id:
+        required: true
+        type: string
+    secrets:
+      QWEN_API_KEY:
+        required: true
+      LINEAR_CLIENT_ID:
+        required: true
+      LINEAR_CLIENT_SECRET:
+        required: true
+permissions: {}
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+      checks: read
+      statuses: read
+    outputs:
+      status: ${{ steps.preflight.outputs.status }}
+      repository: ${{ steps.preflight.outputs.repository }}
+      pr_number: ${{ steps.preflight.outputs.pr_number }}
+      base_branch: ${{ steps.preflight.outputs.base_branch }}
+      base_sha: ${{ steps.preflight.outputs.base_sha }}
+      head_sha: ${{ steps.preflight.outputs.head_sha }}
+      linear_issue: ${{ steps.preflight.outputs.linear_issue }}
+      unable_reason: ${{ steps.preflight.outputs.unable_reason }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          persist-credentials: false
+      - name: Verify central engine identity
+        env:
+          ENGINE_SHA: ${{ job.workflow_sha }}
+        run: test "$(git rev-parse HEAD)" = "$ENGINE_SHA"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22.19.0"
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - id: preflight
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          MODE: ${{ inputs.mode }}
+          TRIGGERING_RUN_ID: ${{ inputs.triggering_run_id }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          REPOSITORY: ${{ github.repository }}
+          ENGINE_SHA: ${{ job.workflow_sha }}
+        shell: bash
+        run: |
+          args=(--mode "$MODE" --repository "$REPOSITORY" --engine-sha "$ENGINE_SHA")
+          case "$MODE" in
+            automatic)
+              test "$PR_NUMBER" = 0 || exit 70
+              args+=(--triggering-run-id "$TRIGGERING_RUN_ID")
+              ;;
+            manual)
+              test -z "$TRIGGERING_RUN_ID" || exit 70
+              args+=(--pr-number "$PR_NUMBER")
+              ;;
+            *) exit 70 ;;
+          esac
+          npm run cli:preflight -- "${args[@]}"
+      - name: Clean preflight data
+        if: always()
+        run: rm -rf -- "${RUNNER_TEMP:?}/ai-pr-review"
+
+  review:
+    needs: preflight
+    if: needs.preflight.outputs.status == 'READY' || needs.preflight.outputs.status == 'UNABLE_TO_REVIEW'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+      checks: read
+      statuses: read
+    outputs:
+      state_ready: ${{ steps.classify.outputs.state_ready }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          persist-credentials: false
+      - name: Verify central engine identity
+        env:
+          ENGINE_SHA: ${{ job.workflow_sha }}
+        run: test "$(git rev-parse HEAD)" = "$ENGINE_SHA"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22.19.0"
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - id: search-tools
+        name: Install reviewer search binaries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ripgrep fd-find
+          rg --version
+          fdfind --version
+      - id: unable
+        if: needs.preflight.outputs.status == 'UNABLE_TO_REVIEW'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ needs.preflight.outputs.repository }}
+          PR_NUMBER: ${{ needs.preflight.outputs.pr_number }}
+          BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
+          HEAD_SHA: ${{ needs.preflight.outputs.head_sha }}
+          ENGINE_SHA: ${{ job.workflow_sha }}
+          LINEAR_ISSUE: ${{ needs.preflight.outputs.linear_issue }}
+          UNABLE_REASON: ${{ needs.preflight.outputs.unable_reason }}
+        shell: bash
+        run: |
+          args=(--repository "$REPOSITORY" --pr-number "$PR_NUMBER"
+            --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA" --engine-sha "$ENGINE_SHA"
+            --work-dir "$RUNNER_TEMP/ai-pr-review"
+            --state-out "$RUNNER_TEMP/ai-pr-review/out/ai-review-state-v1.json"
+            --unable-reason "$UNABLE_REASON")
+          if test -n "$LINEAR_ISSUE"; then args+=(--linear-issue "$LINEAR_ISSUE"); fi
+          code=0
+          npm run cli:review -- emit-preflight-unable "${args[@]}" || code=$?
+          if test "$code" -eq 20; then exit 0; fi
+          exit "$code"
+      - id: prepare
+        if: needs.preflight.outputs.status == 'READY'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          LINEAR_CLIENT_ID: ${{ secrets.LINEAR_CLIENT_ID }}
+          LINEAR_CLIENT_SECRET: ${{ secrets.LINEAR_CLIENT_SECRET }}
+          REPOSITORY: ${{ needs.preflight.outputs.repository }}
+          PR_NUMBER: ${{ needs.preflight.outputs.pr_number }}
+          BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
+          HEAD_SHA: ${{ needs.preflight.outputs.head_sha }}
+          ENGINE_SHA: ${{ job.workflow_sha }}
+          LINEAR_ISSUE: ${{ needs.preflight.outputs.linear_issue }}
+        shell: bash
+        run: |
+          code=0
+          npm run cli:review -- prepare \
+            --repository "$REPOSITORY" --pr-number "$PR_NUMBER" \
+            --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA" --engine-sha "$ENGINE_SHA" \
+            --linear-issue "$LINEAR_ISSUE" --work-dir "$RUNNER_TEMP/ai-pr-review" \
+            --state-out "$RUNNER_TEMP/ai-pr-review/out/ai-review-state-v1.json" || code=$?
+          if test "$code" -eq 20; then exit 0; fi
+          exit "$code"
+      - id: execute
+        if: steps.prepare.outputs.action == 'EXECUTE'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
+          ALIBABA_WORKSPACE_ID: ${{ inputs.alibaba_workspace_id }}
+          REPOSITORY: ${{ needs.preflight.outputs.repository }}
+          PR_NUMBER: ${{ needs.preflight.outputs.pr_number }}
+          BASE_SHA: ${{ needs.preflight.outputs.base_sha }}
+          HEAD_SHA: ${{ needs.preflight.outputs.head_sha }}
+          ENGINE_SHA: ${{ job.workflow_sha }}
+          LINEAR_ISSUE: ${{ needs.preflight.outputs.linear_issue }}
+        shell: bash
+        run: |
+          code=0
+          npm run cli:review -- execute \
+            --repository "$REPOSITORY" --pr-number "$PR_NUMBER" \
+            --base-sha "$BASE_SHA" --head-sha "$HEAD_SHA" --engine-sha "$ENGINE_SHA" \
+            --linear-issue "$LINEAR_ISSUE" --work-dir "$RUNNER_TEMP/ai-pr-review" \
+            --state-out "$RUNNER_TEMP/ai-pr-review/out/ai-review-state-v1.json" || code=$?
+          if test "$code" -eq 20; then exit 0; fi
+          exit "$code"
+      - id: classify
+        name: Classify canonical state
+        run: |
+          state="$RUNNER_TEMP/ai-pr-review/out/ai-review-state-v1.json"
+          if test -f "$state" && test -s "$state" && ! test -L "$state"; then
+            echo 'state_ready=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'state_ready=false' >> "$GITHUB_OUTPUT"
+          fi
+      - id: upload
+        if: steps.classify.outputs.state_ready == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ai-review-state-v1-pr-${{ needs.preflight.outputs.pr_number }}
+          path: ${{ runner.temp }}/ai-pr-review/out/ai-review-state-v1.json
+          if-no-files-found: error
+          retention-days: 90
+      - id: cleanup
+        name: Clean private context and worker runtime
+        if: always()
+        run: rm -rf -- "${RUNNER_TEMP:?}/ai-pr-review"
+
+  publisher:
+    needs: [preflight, review]
+    # A successful review with state_ready=true necessarily completed its required upload.
+    if: needs.review.result == 'success' && needs.review.outputs.state_ready == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: write
+      checks: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          persist-credentials: false
+      - name: Verify central engine identity
+        env:
+          ENGINE_SHA: ${{ job.workflow_sha }}
+        run: test "$(git rev-parse HEAD)" = "$ENGINE_SHA"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22.19.0"
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: ai-review-state-v1-pr-${{ needs.preflight.outputs.pr_number }}
+          path: ${{ runner.temp }}/ai-pr-review/out
+      - id: publish
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: npm run cli:publish -- --state-file "$RUNNER_TEMP/ai-pr-review/out/ai-review-state-v1.json"

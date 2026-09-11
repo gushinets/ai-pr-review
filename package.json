@@ -14,7 +14,11 @@
     "test": "vitest run",
     "test:security": "vitest run test/security",
     "check": "npm run lint && npm run format:check && npm run typecheck && npm test",
-    "postinstall": "patch-package --error-on-fail"
+    "postinstall": "patch-package --error-on-fail",
+    "cli:preflight": "node dist/src/cli/preflight.js",
+    "cli:review": "node dist/src/cli/review.js",
+    "cli:publish": "node dist/src/cli/publish.js",
+    "cli:calibration": "node dist/src/cli/calibration-report.js"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.85.1",
