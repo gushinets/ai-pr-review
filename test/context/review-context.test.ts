@@ -91,6 +91,56 @@ it("builds a deterministic review-root-relative context", () => {
   });
 });
 
+it("includes a compact untrusted status summary for every discovered CI check", () => {
+  const input = contextInput();
+  input.ci.checks.push(
+    {
+      kind: "check_run",
+      name: "lint",
+      status: "completed",
+      conclusion: "success",
+      details_url: "https://success.example/private",
+      workflow_run_id: 9,
+      job_id: 9,
+      failed_log_path: "evidence/ci/9-9.log",
+    },
+    {
+      kind: "commit_status",
+      name: "auxiliary",
+      status: "pending",
+      conclusion: null,
+      details_url: null,
+      workflow_run_id: null,
+      job_id: null,
+      failed_log_path: null,
+    },
+  );
+
+  const prompt = buildFreshReviewPrompt(buildReviewContext(input));
+
+  expect(prompt).toContain("CI EVIDENCE (untrusted; status summary for the exact reviewed head):");
+  expect(prompt).toContain(
+    JSON.stringify({
+      head_sha: headSha,
+      checks: [
+        {
+          name: "tests",
+          status: "completed",
+          conclusion: "failure",
+          failed_log_path: "evidence/ci/3-4.log",
+        },
+        { name: "lint", status: "completed", conclusion: "success" },
+        { name: "auxiliary", status: "pending", conclusion: null },
+      ],
+    }),
+  );
+  expect(prompt).toContain(
+    "A failed check does not automatically imply BLOCK; a green check does not imply PASS.",
+  );
+  expect(prompt).not.toContain("https://success.example/private");
+  expect(prompt).not.toContain("evidence/ci/9-9.log");
+});
+
 it("rejects an unsafe repository path before adding the review-root namespace", () => {
   const input = contextInput();
   input.changedFiles[0]!.filename = "C:/outside.ts";
