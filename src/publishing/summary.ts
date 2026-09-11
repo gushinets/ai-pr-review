@@ -101,14 +101,11 @@ export function renderSummary(state: ReviewStateV1): string {
     renderText(
       `Rejudge: ${telemetry.rejudge_status}\nFailed stage: ${telemetry.rejudge_failed_stage ?? "none"}\nDuration ms: ${telemetry.duration_ms}\nJudge repairs: ${telemetry.judge_repair_attempts}\nClosure used: ${telemetry.closure_used}\nInput tokens: ${telemetry.input_tokens ?? "unknown"}\nOutput tokens: ${telemetry.output_tokens ?? "unknown"}\nEstimated cost USD: ${telemetry.estimated_cost_usd ?? "unknown"}`,
     ),
-    renderText(
-      telemetry.models
-        .map(
-          (model) =>
-            `${model.role}: ${model.model_id}\nRequested reasoning: ${model.requested_reasoning}\nEffective reasoning: ${model.effective_reasoning ?? "unknown"}`,
-        )
-        .join("\n\n"),
-    ),
+    ...telemetry.models.flatMap((model) => [
+      renderText(`Role: ${model.role}\nRequested reasoning: ${model.requested_reasoning}`),
+      renderText(`Model ID: ${model.model_id}`, 450),
+      renderText(`Effective reasoning: ${model.effective_reasoning ?? "unknown"}`, 450),
+    ]),
     "Stage 1 calibration: maintainer feedback — 👍 correct / 👎 incorrect.",
   ]
     .join("\n\n")

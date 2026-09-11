@@ -231,9 +231,12 @@ it("bounds escaped UTF-8 summary while retaining verdict, history disclosure and
       evidence: huge,
     })),
   };
-  value.telemetry.models = Array.from({ length: 4 }, () => ({
-    ...value.telemetry.models[0]!,
-    model_id: huge,
+  const roles = ["reviewer_1", "reviewer_2", "reviewer_3", "judge"] as const;
+  value.telemetry.models = roles.map((role, index) => ({
+    role,
+    model_id: `${role} model ${huge}`,
+    requested_reasoning: index === 0 ? "medium" : "high",
+    effective_reasoning: `${huge} ${role} reasoning`,
   }));
   const original = structuredClone(value);
   const body = renderSummary(value);
@@ -242,6 +245,18 @@ it("bounds escaped UTF-8 summary while retaining verdict, history disclosure and
   expect(body).toContain("b".repeat(40));
   expect(body).toContain(note);
   expect(body).toContain("resolved: 120; still_present: 0; invalidated: 0; uncertain: 0");
+  for (const role of roles)
+    expect(body.includes(`${role} model`), `model record retained for ${role}`).toBe(true);
+  for (const role of roles) {
+    expect(body).toContain(`Role: ${role}`);
+    expect(body).toContain(`Model ID: ${role} model`);
+    expect(body).toContain(`${role} reasoning`);
+  }
+  expect(body.match(/Model ID:/g)).toHaveLength(4);
+  expect(body.match(/Requested reasoning:/g)).toHaveLength(4);
+  expect(body.match(/Effective reasoning:/g)).toHaveLength(4);
+  expect(body).toContain("Requested reasoning: medium");
+  expect(body.match(/Requested reasoning: high/g)).toHaveLength(3);
   expect(body).toContain("[Truncated; full detail is in the canonical artifact.]");
   expect(body).not.toContain("�");
   expect(body).not.toContain("\ud83d</pre>");
