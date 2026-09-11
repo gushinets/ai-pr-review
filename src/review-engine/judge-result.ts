@@ -53,12 +53,15 @@ export function parseJudgeResult(raw: string): JudgeResultV1 {
 export async function getValidJudgeResult(
   engine: RejudgeEngine,
   input: { reviewRoot: string; runtimeDir: string; prompt: string },
+  validateContext: (result: JudgeResultV1) => void = () => {},
 ): Promise<{ result: JudgeResultV1; runId: string; repairAttempts: 0 | 1 }> {
   const outputInstructions = buildJudgeOutputInstructions();
   const fresh = await engine.fresh({ ...input, outputInstructions });
   let invalid: JudgeProtocolError;
   try {
-    return { result: parseJudgeResult(fresh.answer), runId: fresh.run_id, repairAttempts: 0 };
+    const result = parseJudgeResult(fresh.answer);
+    validateContext(result);
+    return { result, runId: fresh.run_id, repairAttempts: 0 };
   } catch (error) {
     if (!(error instanceof JudgeProtocolError)) throw error;
     invalid = error;
@@ -71,7 +74,9 @@ export async function getValidJudgeResult(
       prompt: buildJudgeRepairPrompt(invalid.message),
     });
     if (repaired.run_id !== fresh.run_id) throw new JudgeRepairError(fresh.run_id);
-    return { result: parseJudgeResult(repaired.answer), runId: fresh.run_id, repairAttempts: 1 };
+    const result = parseJudgeResult(repaired.answer);
+    validateContext(result);
+    return { result, runId: fresh.run_id, repairAttempts: 1 };
   } catch {
     throw new JudgeRepairError(fresh.run_id);
   }

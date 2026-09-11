@@ -110,3 +110,17 @@ it("does not follow a linked agent directory or replace an existing configuratio
   await expect(writeModelStudioConfig(clean, "a")).rejects.toThrow();
   expect(await readFile(join(clean, "pi-agent/models.json"), "utf8")).toBe("existing");
 });
+
+it.each(["\n", "\r", "\r\n", "\u2028", "\u2029"])(
+  "rejects workspace suffix terminator %j",
+  async (suffix) => {
+    const directory = await mkdtemp(join(tmpdir(), "model-workspace-"));
+    try {
+      await expect(writeModelStudioConfig(directory, "workspace" + suffix)).rejects.toThrow(
+        "INVALID_ALIBABA_WORKSPACE_ID",
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  },
+);
