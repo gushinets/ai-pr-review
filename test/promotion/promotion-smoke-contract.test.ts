@@ -476,6 +476,61 @@ it("CLI exits nonzero on unmet acceptance without running later scenarios", asyn
   expect(existsSync(String(calls[0]!.request.review_root))).toBe(false);
 });
 
+it("keeps an unclassified worker failure inside the smoke output allowlist", async () => {
+  const cli = await smoke();
+  vi.stubEnv("QWEN_TOKEN_PLAN_API_KEY", "sk-sp-synthetic-promotion");
+  const calls: Array<{ request: Record<string, unknown> }> = [];
+  vi.mocked(nodeSpawn).mockImplementation((...args: Parameters<typeof nodeSpawn>) => {
+    const child = actualSpawn(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        "process.stderr.write('unclassified adapter raw body: private-body-canary'); process.exitCode = 1;",
+      ],
+      args[2],
+    );
+    const end = child.stdin!.end.bind(child.stdin!);
+    child.stdin!.end = ((data: string) => {
+      calls.push({ request: JSON.parse(data) });
+      return end(data);
+    }) as typeof end;
+    return child;
+  });
+  const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+  const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+  try {
+    expect(await cli.runCli([], { QWEN_TOKEN_PLAN_API_KEY: "sk-sp-synthetic-promotion" })).toBe(70);
+    expect(calls).toHaveLength(1);
+    const allowedKeys = [
+      "duration_ms",
+      "fixture",
+      "input_tokens",
+      "models",
+      "outcome",
+      "output_tokens",
+      "provider_failure_category",
+      "scenario",
+    ];
+    const lines = stdout.mock.calls.map(([line]) => String(line).trim()).filter(Boolean);
+    expect(lines).toHaveLength(1);
+    const stderrLines = stderr.mock.calls.map(([value]) => String(value).trim()).filter(Boolean);
+    expect(stderrLines).toEqual([]);
+    for (const line of lines) {
+      const evidence: unknown = JSON.parse(line);
+      expect(typeof evidence).toBe("object");
+      expect(Object.keys(evidence as object).sort()).toEqual(allowedKeys);
+      expect(JSON.stringify(evidence)).not.toMatch(
+        /private-body-canary|raw body|diagnostic|transcript/iu,
+      );
+    }
+    expect(stderr.mock.calls).toEqual([]);
+  } finally {
+    stdout.mockRestore();
+    stderr.mockRestore();
+  }
+});
+
 it("ships a manual-only least-privilege workflow with an isolated smoke secret", async () => {
   const path = ".github/workflows/promotion-smoke.yml";
   expect(existsSync(path), "Task 18 workflow must exist").toBe(true);

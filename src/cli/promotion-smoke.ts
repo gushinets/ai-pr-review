@@ -249,7 +249,10 @@ export async function runScenario(
     const snapshot = await prepareSmokeFixture(scenario, privateDir, engineSha);
     process.env.AI_PR_REVIEW_ROOT = snapshot.reviewRoot;
     await assertPromotionRuntime(snapshot);
-    const engine = createRejudgeEngine({ deadline: started + CENTRAL_CONFIG.reviewTimeoutMs });
+    const engine = createRejudgeEngine({
+      deadline: started + CENTRAL_CONFIG.reviewTimeoutMs,
+      diagnostic: () => {},
+    });
     // Smoke-only instruction, never fabricated/corrupted output. Normal production
     // parsing decides whether the real first answer needs same-run protocol repair.
     const reviewEngine: RejudgeEngine =

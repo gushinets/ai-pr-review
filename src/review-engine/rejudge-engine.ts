@@ -91,13 +91,19 @@ function parseResponse(text: string): RejudgeWorkerResponse {
   throw new Error("INVALID_WORKER_RESPONSE");
 }
 export function createRejudgeEngine(
-  options: { deadline?: number; signal?: AbortSignal } = {},
+  options: {
+    deadline?: number;
+    signal?: AbortSignal;
+    diagnostic?: (message: string) => void;
+  } = {},
 ): RejudgeEngine {
   const deadline = Math.min(
     options.deadline ?? Infinity,
     Date.now() + CENTRAL_CONFIG.reviewTimeoutMs,
   );
   const attempts = new Map<string, { runtimeDir: string; runId?: string; busy: boolean }>();
+  const diagnostic =
+    options.diagnostic ?? ((message: string) => process.stderr.write(`${message}\n`));
   async function execute(input: RunInput, runId?: string): Promise<RejudgeRun> {
     const stage = runId === undefined ? "setup" : "resume";
     const fail = () => new RejudgeEngineError(stage);
@@ -180,10 +186,10 @@ export function createRejudgeEngine(
             // Never persist provider errors or expose child output in the owned error object.
             if (stderr && !oversized) {
               const code = stderr.trim();
-              process.stderr.write(
-                (isProviderFailureReason(code) || code === "PI_CONFINEMENT_CONTRACT_FAILED"
+              diagnostic(
+                isProviderFailureReason(code) || code === "PI_CONFINEMENT_CONTRACT_FAILED"
                   ? code
-                  : "Rejudge worker diagnostic") + "\n",
+                  : "Rejudge worker diagnostic",
               );
             }
             if (code !== 0 || childError || oversized || controller.signal.aborted) {
