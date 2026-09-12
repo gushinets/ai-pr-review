@@ -115,7 +115,7 @@ export function renderSummary(state: ReviewStateV1): string {
         ]),
     "### Technical completion",
     renderText(
-      `Rejudge: ${telemetry.rejudge_status}\nFailed stage: ${telemetry.rejudge_failed_stage ?? "none"}\nDuration ms: ${telemetry.duration_ms}\nJudge repairs: ${telemetry.judge_repair_attempts}\nClosure used: ${telemetry.closure_used}\nInput tokens: ${telemetry.input_tokens ?? "unknown"}\nOutput tokens: ${telemetry.output_tokens ?? "unknown"}\nEstimated cost USD: ${telemetry.estimated_cost_usd ?? "unknown"}`,
+      `Rejudge: ${telemetry.rejudge_status}\nFailed stage: ${telemetry.rejudge_failed_stage ?? "none"}\nDuration ms: ${telemetry.duration_ms}\nJudge repairs: ${telemetry.judge_repair_attempts}\nClosure used: ${telemetry.closure_used}\nInput tokens: ${telemetry.input_tokens ?? "unknown"}\nOutput tokens: ${telemetry.output_tokens ?? "unknown"}`,
     ),
     ...telemetry.models.flatMap((model) => [
       renderText(`Role: ${model.role}\nRequested reasoning: ${model.requested_reasoning}`),

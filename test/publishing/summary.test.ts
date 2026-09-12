@@ -161,12 +161,13 @@ describe("publication rendering", () => {
       "Effective reasoning: unknown",
       "Input tokens: unknown",
       "Output tokens: unknown",
-      "Estimated cost USD: unknown",
+
       "👍 correct",
       "👎 incorrect",
     ])
       expect(body).toContain(text);
     expect(body).not.toContain("Estimated cost USD: 0");
+    expect(body).not.toContain("Estimated cost USD");
     expect(body).toContain(`<!-- ai-pr-review-verdict-feedback:v1:${"b".repeat(40)}:correct -->`);
     expect(body).toContain(`<!-- ai-pr-review-verdict-feedback:v1:${"b".repeat(40)}:incorrect -->`);
   });
