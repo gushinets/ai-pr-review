@@ -64,7 +64,8 @@ export interface ReviewStateV1 {
     models: Array<{
       role: "reviewer_1" | "reviewer_2" | "reviewer_3" | "judge";
       model_id: string;
-      requested_reasoning: "medium" | "high";
+      requested_reasoning: "medium" | "high" | "xhigh";
+      provider_reported_model_id?: string | null;
       effective_reasoning: string | null;
     }>;
     judge_repair_attempts: 0 | 1;
@@ -133,7 +134,14 @@ const modelSchema = Type.Object(
       Type.Literal("judge"),
     ]),
     model_id: Type.String({ minLength: 1 }),
-    requested_reasoning: Type.Union([Type.Literal("medium"), Type.Literal("high")]),
+    requested_reasoning: Type.Union([
+      Type.Literal("medium"),
+      Type.Literal("high"),
+      Type.Literal("xhigh"),
+    ]),
+    provider_reported_model_id: Type.Optional(
+      Type.Union([Type.String({ minLength: 1 }), Type.Null()]),
+    ),
     effective_reasoning: Type.Union([Type.String({ minLength: 1 }), Type.Null()]),
   },
   { additionalProperties: false },
@@ -203,6 +211,11 @@ export const ReviewStateV1Schema = Type.Object(
 const validator = Schema.Compile(ReviewStateV1Schema);
 
 const identityRequiredReasons = new Set<UnableReason>([
+  "PROVIDER_CONFIG_INVALID",
+  "PROVIDER_AUTH_FAILED",
+  "PROVIDER_RATE_LIMITED",
+  "PROVIDER_QUOTA_EXHAUSTED",
+  "PROVIDER_UNAVAILABLE",
   "POLICY_MISSING",
   "PR_TOO_LARGE",
   "LINEAR_AUTH_FAILED",
@@ -221,6 +234,11 @@ const identityRequiredReasons = new Set<UnableReason>([
 ]);
 
 const ciRequiredReasons = new Set<UnableReason>([
+  "PROVIDER_CONFIG_INVALID",
+  "PROVIDER_AUTH_FAILED",
+  "PROVIDER_RATE_LIMITED",
+  "PROVIDER_QUOTA_EXHAUSTED",
+  "PROVIDER_UNAVAILABLE",
   "SNAPSHOT_FAILED",
   "REJUDGE_PANEL_FAILED",
   "REJUDGE_JUDGE_FAILED",

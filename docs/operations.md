@@ -5,14 +5,18 @@ The reusable workflow runs trusted central code on Ubuntu 24.04 with Node 22.19.
 ## Consumer setup
 
 - Pin `gushinets/ai-pr-review/.github/workflows/reusable-ai-pr-review.yml` to a full commit SHA. Updating that pin is an explicit reviewed change.
-- Set repository secrets `QWEN_API_KEY`, `LINEAR_CLIENT_ID` and `LINEAR_CLIENT_SECRET`, and forward each by name. Do not use `secrets: inherit`. The native ephemeral `GITHUB_TOKEN` is sufficient; no PAT is needed.
-- Set the non-secret repository variable `ALIBABA_WORKSPACE_ID` and pass it as `alibaba_workspace_id`. It must identify the Germany (Frankfurt) Model Studio workspace with Global service deployment scope. The execute CLI validates its format before any model call; provider endpoints and models are fixed centrally.
+- Set repository secrets `QWEN_TOKEN_PLAN_API_KEY`, `LINEAR_CLIENT_ID` and `LINEAR_CLIENT_SECRET`, and forward each by name. Do not use `secrets: inherit`. The native ephemeral `GITHUB_TOKEN` is sufficient; no PAT is needed.
+- No `ALIBABA_WORKSPACE_ID` variable or workspace input is used. The Token Plan key must be `sk-sp-...`, matching `^sk-sp-[A-Za-z0-9._-]+$`. The native Pi provider `qwen-token-plan` and endpoint `https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1` are central constants. Singapore is the accepted inference region for model-visible review context.
 - Add the strict `.github/ai-review.yml` and policy files consumed from the PR base SHA. Missing or invalid configuration produces `UNABLE_TO_REVIEW`.
 - The caller must allow `actions: read`, `contents: read`, `statuses: read`, `pull-requests: write` and `checks: write`. Central preflight and review jobs reduce those permissions to read-only; only publisher gets write access. No `issues: write` permission is requested.
 - Automatic callers use `mode: automatic` with the completed primary CI `triggering_run_id`; omit `pr_number`. Primary CI names are `baseline-backend` for Platform and `CI` for Payments, regardless of CI conclusion. Manual maintainer dispatch uses `mode: manual` with a positive `pr_number`; omit `triggering_run_id`. The CLI validates numeric IDs and authorization before any Linear or model credential is used.
 - Configure caller concurrency for each repository/PR with `cancel-in-progress: true`. This belongs to the consumer workflows; do not reuse the same cancel group in a nested workflow. Exact-head barriers remain active before persistence and publication.
 
-Preflight has no Linear or Qwen credentials. Prepare receives only read-only GitHub and Linear credentials; execute receives only read-only GitHub, Qwen and the workspace variable. Rejudge children use the existing explicit environment allowlist and `PI_OFFLINE=1`. Publisher receives only GitHub credentials and the current run's canonical state.
+Preflight has no Linear or model credentials. Prepare receives only read-only GitHub and Linear credentials; execute receives only read-only GitHub and the Token Plan key. Legacy `QWEN_API_KEY`, `BAILIAN_TOKEN_PLAN_API_KEY` and workspace routing are rejected by every review CLI phase. Rejudge children receive the Token Plan key through the explicit environment allowlist, no GitHub or Linear credentials, and `PI_OFFLINE=1`. Publisher receives only GitHub credentials and the current run's canonical state.
+
+Provider configuration, authentication, rate-limit, quota and availability failures produce `UNABLE_TO_REVIEW`; there is no PAYG or Coding Plan fallback. Check Credits in Alibaba subscription usage. `estimated_cost_usd` is null for Token Plan runs; historical V1 artifacts with an older cost estimate remain readable. Requested model IDs and reasoning levels remain central; an unavailable provider-reported model ID is null.
+
+The verified runtime pins are `rejudge@0.4.1` and `@earendil-works/pi-ai`, `@earendil-works/pi-coding-agent`, and `@earendil-works/pi-tui` at `0.85.1`. The Pi root-confinement patch remains required and is checked before model execution.
 
 ## Reruns and publication recovery
 

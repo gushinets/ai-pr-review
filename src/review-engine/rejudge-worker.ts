@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { CENTRAL_CONFIG } from "../config/central-config.js";
+import type { ProviderFailureReason } from "../contracts/failure-reasons.js";
 import { sanitizeCiLog } from "../github/ci-context.js";
 import { assertPiConfinementContract } from "../sandbox/pi-confinement-contract.js";
 import { buildWorkerEnv } from "../sandbox/worker-env.js";
@@ -22,6 +23,7 @@ export type RejudgeWorkerResponse =
       stage: "setup" | "panel" | "judge" | "resume";
       model: string | null;
       message: string;
+      provider_reason?: ProviderFailureReason;
     };
 export const RUN_ID_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[a-z0-9]{1,8}$/;
 const record = (value: unknown): value is Record<string, unknown> =>
@@ -36,6 +38,24 @@ const failure = (
   model,
   message: "Rejudge execution failed",
 });
+
+function providerFailure(model: string, detail: string): ProviderFailureReason | undefined {
+  if (
+    ![...CENTRAL_CONFIG.reviewers, CENTRAL_CONFIG.judge].some((m) => m.model === model) ||
+    !/^(?:empty-output retry )?did not complete cleanly \(stopReason: error\)(?::|$)/.test(detail)
+  )
+    return undefined;
+  if (/\b(?:401|403|invalid_api_key|authentication_error|unauthorized|forbidden)\b/i.test(detail))
+    return "PROVIDER_AUTH_FAILED";
+  if (
+    /\b(?:insufficient_quota|resource[_ -]exhausted)\b|\b(?:quota|credits?)\b.{0,40}\b(?:exhausted|depleted|insufficient|exceeded)\b|\binsufficient\s+(?:quota|credits?)\b/i.test(
+      detail,
+    )
+  )
+    return "PROVIDER_QUOTA_EXHAUSTED";
+  if (/\b429\b/.test(detail)) return "PROVIDER_RATE_LIMITED";
+  return "PROVIDER_UNAVAILABLE";
+}
 export function parseWorkerRequest(value: unknown): RejudgeWorkerRequest {
   if (
     !record(value) ||
@@ -91,11 +111,17 @@ export function parseRejudgeResult(
     return failure();
   const text = value.content[0].text;
   if (text.startsWith("rejudge failed:")) {
-    diagnostic(safeWorkerDiagnostic(text));
     const match =
-      /^rejudge failed: (panel|judge|resume) \(([^)]+)\) (?:failed: (.+)|aborted)$/.exec(text);
+      /^rejudge failed: (panel|judge|resume) \(([^)]+)\) (?:failed: ([\s\S]+)|aborted)$/.exec(
+        text.slice(0, 2048),
+      );
+    const reason = match ? providerFailure(match[2]!, match[3] ?? "") : undefined;
+    diagnostic(reason ?? "Rejudge execution failed");
     return match
-      ? failure(match[1] as "panel" | "judge" | "resume", safeWorkerDiagnostic(match[2]!))
+      ? {
+          ...failure(match[1] as "panel" | "judge" | "resume", safeWorkerDiagnostic(match[2]!)),
+          ...(reason ? { provider_reason: reason } : {}),
+        }
       : failure();
   }
   const lines = text.split("\n"),
@@ -193,8 +219,18 @@ async function main(): Promise<void> {
       diagnostic,
     );
   } catch (error) {
-    diagnostic(error instanceof Error ? error.message : "Worker setup failed");
-    response = failure();
+    const code = error instanceof Error ? error.message : "";
+    diagnostic(
+      code === "PI_CONFINEMENT_CONTRACT_FAILED" || code === "PROVIDER_CONFIG_INVALID"
+        ? code
+        : "Worker setup failed",
+    );
+    response = {
+      ...failure(),
+      ...(code === "PROVIDER_CONFIG_INVALID"
+        ? { provider_reason: "PROVIDER_CONFIG_INVALID" as const }
+        : {}),
+    };
   }
   stdout(JSON.stringify(response) + "\n");
 }

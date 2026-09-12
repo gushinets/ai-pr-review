@@ -27,7 +27,13 @@ it("allowlists only operating values and Qwen, and overwrites all trusted runtim
     HTTP_PROXY: "http://proxy",
     HTTPS_PROXY: "https://proxy",
     NO_PROXY: "localhost",
-    QWEN_API_KEY: "qwen-canary",
+    QWEN_TOKEN_PLAN_API_KEY: "sk-sp-qwen-canary",
+    QWEN_API_KEY: "legacy-canary",
+    BAILIAN_TOKEN_PLAN_API_KEY: "bailian-canary",
+    ALIBABA_WORKSPACE_ID: "workspace-canary",
+    OTHER_TOKEN: "token-canary",
+    OTHER_SECRET: "secret-canary",
+    OTHER_KEY: "key-canary",
     GITHUB_TOKEN: "github-canary",
     LINEAR_CLIENT_SECRET: "linear-canary",
     LINEAR_CLIENT_ID: "linear-id",
@@ -49,7 +55,7 @@ it("allowlists only operating values and Qwen, and overwrites all trusted runtim
     HTTP_PROXY: "http://proxy",
     HTTPS_PROXY: "https://proxy",
     NO_PROXY: "localhost",
-    QWEN_API_KEY: "qwen-canary",
+    QWEN_TOKEN_PLAN_API_KEY: "sk-sp-qwen-canary",
     HOME: join(input.runtimeDir, "home"),
     XDG_CONFIG_HOME: join(input.runtimeDir, "xdg"),
     PI_CODING_AGENT_DIR: join(input.runtimeDir, "pi-agent"),
@@ -70,10 +76,20 @@ it("requires Qwen and sibling runtime, and rejects physically escaping runtime c
   await expect(
     buildWorkerEnv(
       { ...input, runtimeDir: join(input.reviewRoot, "runtime") },
-      { QWEN_API_KEY: "k" },
+      { QWEN_TOKEN_PLAN_API_KEY: "sk-sp-test" },
     ),
   ).rejects.toThrow();
   await mkdir(join(input.reviewRoot, "hidden"));
   await symlink(join(input.reviewRoot, "hidden"), join(input.runtimeDir, "pi-agent"), "junction");
-  await expect(buildWorkerEnv(input, { QWEN_API_KEY: "k" })).rejects.toThrow();
+  await expect(buildWorkerEnv(input, { QWEN_TOKEN_PLAN_API_KEY: "sk-sp-test" })).rejects.toThrow();
 });
+
+it.each([undefined, "", " ", "sk-payg-key", "sk-sp-", "sk-sp-key\n", "sk-sp-key with spaces"])(
+  "rejects invalid Token Plan key %j before runtime setup",
+  async (key) => {
+    const input = await layout();
+    await expect(
+      buildWorkerEnv(input, { QWEN_TOKEN_PLAN_API_KEY: key, QWEN_API_KEY: "sk-sp-legacy" }),
+    ).rejects.toThrow("PROVIDER_CONFIG_INVALID");
+  },
+);

@@ -22,7 +22,7 @@ async function fixture() {
   await writeFile(
     worker,
     `import { appendFileSync } from 'node:fs';
-    if (process.env.GITHUB_TOKEN || process.env.LINEAR_CLIENT_ID || process.env.LINEAR_CLIENT_SECRET || !process.env.QWEN_API_KEY) process.exit(9);
+    if (process.env.GITHUB_TOKEN || process.env.LINEAR_CLIENT_ID || process.env.LINEAR_CLIENT_SECRET || !process.env.QWEN_TOKEN_PLAN_API_KEY) process.exit(9);
     let data=''; for await(const chunk of process.stdin) data+=chunk;
     const request=JSON.parse(data);
     appendFileSync(${JSON.stringify(trace)},'worker-safe\\n');
@@ -43,9 +43,9 @@ async function fixture() {
       const url=typeof input==='string'?input:input.url;
       record(url);
       const phase=process.argv[2];
-      if(phase==='prepare' && (!process.env.LINEAR_CLIENT_SECRET || process.env.QWEN_API_KEY || process.env.ALIBABA_WORKSPACE_ID)) throw Error('prepare-env');
-      if(phase==='execute' && (process.env.LINEAR_CLIENT_SECRET || process.env.LINEAR_CLIENT_ID || !process.env.QWEN_API_KEY)) throw Error('execute-env');
-      if(phase==='emit-preflight-unable' && (process.env.LINEAR_CLIENT_SECRET || process.env.QWEN_API_KEY)) throw Error('emit-env');
+      if(phase==='prepare' && (!process.env.LINEAR_CLIENT_SECRET || process.env.QWEN_TOKEN_PLAN_API_KEY || process.env.ALIBABA_WORKSPACE_ID)) throw Error('prepare-env');
+      if(phase==='execute' && (process.env.LINEAR_CLIENT_SECRET || process.env.LINEAR_CLIENT_ID || !process.env.QWEN_TOKEN_PLAN_API_KEY)) throw Error('execute-env');
+      if(phase==='emit-preflight-unable' && (process.env.LINEAR_CLIENT_SECRET || process.env.QWEN_TOKEN_PLAN_API_KEY)) throw Error('emit-env');
       const json=data=>new Response(JSON.stringify(data),{status:200,headers:{'content-type':'application/json'}});
       if(url.includes('/oauth/token')) return json({access_token:'oauth-canary',token_type:'Bearer',expires_in:3600,scope:'read'});
       if(url.includes('api.linear.app/graphql')) return json({data:{issue:{id:'issue',sharedAccess:{sharedWithUsers:[]},reactions:[],identifier:'ANY-1',title:'Private linear title',description:'Credentials echoed linear-secret-canary github-canary',comments:{nodes:[],pageInfo:{hasNextPage:false,endCursor:null}}}}});
@@ -121,7 +121,31 @@ const linear = {
   LINEAR_CLIENT_ID: "linear-client-canary",
   LINEAR_CLIENT_SECRET: "linear-secret-canary",
 };
-const qwen = { QWEN_API_KEY: "qwen-canary", ALIBABA_WORKSPACE_ID: "workspace" };
+const qwen = { QWEN_TOKEN_PLAN_API_KEY: "sk-sp-qwen-canary" };
+it.each(["QWEN_API_KEY", "BAILIAN_TOKEN_PLAN_API_KEY", "ALIBABA_WORKSPACE_ID"])(
+  "rejects legacy %s in every review phase before network access",
+  async (key) => {
+    for (const phase of ["prepare", "execute", "emit-preflight-unable"]) {
+      const f = await fixture();
+      const result = await f.run(phase, {
+        ...(phase === "prepare" ? linear : phase === "execute" ? qwen : {}),
+        [key]: "legacy-canary",
+      });
+      expect(result).toEqual({ code: 70, stdout: "", stderr: "" });
+      await expect(readFile(f.trace, "utf8")).rejects.toThrow();
+    }
+  },
+  20000,
+);
+it.each([undefined, "", " "])("requires a nonblank Token Plan key in execute: %j", async (key) => {
+  const f = await fixture();
+  expect(await f.run("execute", { QWEN_TOKEN_PLAN_API_KEY: key })).toEqual({
+    code: 70,
+    stdout: "",
+    stderr: "",
+  });
+  await expect(readFile(f.trace, "utf8")).rejects.toThrow();
+});
 it("runs production prepare and execute in separate OS processes, including isolated Rejudge child", async () => {
   const f = await fixture();
   const prepared = await f.run("prepare", linear);
@@ -146,17 +170,18 @@ it("emits preflight UNABLE with no AI or Linear credentials and null review iden
     review_identity: null,
   });
 });
-it.each(["", "bad/workspace", "workspace\n"])(
-  "rejects workspace %j before first model call",
-  async (workspace) => {
+it.each(["sk-payg-key", "sk-sp-", "sk-sp-key\n"])(
+  "rejects invalid Token Plan key %j before first model call",
+  async (key) => {
     const f = await fixture();
     expect((await f.run("prepare", linear)).code).toBe(0);
     expect(await readFile(join(f.root, "output"), "utf8")).toBe("action=EXECUTE\n");
-    const result = await f.run("execute", { ...qwen, ALIBABA_WORKSPACE_ID: workspace });
+    const result = await f.run("execute", { QWEN_TOKEN_PLAN_API_KEY: key });
     expect(result.stdout).toBe("");
     expect(await readFile(f.trace, "utf8")).not.toContain("worker-safe");
     expect(JSON.parse(await readFile(f.stateOut, "utf8"))).toMatchObject({
       outcome: "UNABLE_TO_REVIEW",
+      unable_reason: "PROVIDER_CONFIG_INVALID",
     });
   },
   20000,
@@ -182,7 +207,7 @@ it.each([false, true])(
     const result = await f.run("execute", {
       ...qwen,
       TEST_STALE_AT: "3",
-      ...(unable ? { ALIBABA_WORKSPACE_ID: "invalid/workspace" } : {}),
+      ...(unable ? { QWEN_TOKEN_PLAN_API_KEY: "invalid-key" } : {}),
     });
     expect(result).toEqual({ code: 20, stdout: "", stderr: "" });
     await expect(readFile(f.stateOut, "utf8")).rejects.toThrow();

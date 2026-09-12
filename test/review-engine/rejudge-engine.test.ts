@@ -3,6 +3,41 @@ import { parseRejudgeResult, parseWorkerRequest } from "../../src/review-engine/
 const id = "2026-09-11T01-02-03-004Z-abc123";
 const metadata = `Run ID: ${id}. Follow up with resumeRunId: "${id}".`;
 const result = (text: string) => ({ content: [{ type: "text", text }] });
+it.each([
+  ["401 Unauthorized", "PROVIDER_AUTH_FAILED"],
+  ["403 Forbidden", "PROVIDER_AUTH_FAILED"],
+  ["invalid_api_key", "PROVIDER_AUTH_FAILED"],
+  ["429 Too Many Requests", "PROVIDER_RATE_LIMITED"],
+  ["429 insufficient_quota", "PROVIDER_QUOTA_EXHAUSTED"],
+  ["credits exhausted", "PROVIDER_QUOTA_EXHAUSTED"],
+  ["RESOURCE_EXHAUSTED", "PROVIDER_QUOTA_EXHAUSTED"],
+  ["503 Service Unavailable", "PROVIDER_UNAVAILABLE"],
+  ["fetch failed", "PROVIDER_UNAVAILABLE"],
+  ["request timed out", "PROVIDER_UNAVAILABLE"],
+  ["unclassified provider failure", "PROVIDER_UNAVAILABLE"],
+])("classifies shipped model-error evidence %s without carrying raw bodies", (detail, reason) => {
+  const diagnostic = vi.fn();
+  const response = parseRejudgeResult(
+    result(
+      "rejudge failed: panel (qwen-token-plan/glm-5.2) failed: did not complete cleanly (stopReason: error): " +
+        detail +
+        " private-body-canary",
+    ),
+    "fresh",
+    undefined,
+    diagnostic,
+  );
+  expect(response).toMatchObject({ ok: false, stage: "panel", provider_reason: reason });
+  expect(JSON.stringify([response, diagnostic.mock.calls])).not.toContain("private-body-canary");
+});
+it.each([
+  "rejudge failed: panel (qwen-token-plan/glm-5.2) failed: 401 local setup",
+  "rejudge failed: resume (2026-09-11T01-02-03-004Z-abc123) failed: 429 file error",
+  "rejudge failed: panel (other/model) failed: did not complete cleanly (stopReason: error): 401",
+  "rejudge failed: judge (qwen-token-plan/qwen3.8-max) aborted",
+])("does not guess provider origin: %s", (text) => {
+  expect(parseRejudgeResult(result(text), "fresh")).not.toHaveProperty("provider_reason");
+});
 it("strips exactly the final shipped run metadata line while preserving answer whitespace", () => {
   expect(parseRejudgeResult(result("answer  \n\n" + metadata), "fresh")).toEqual({
     schema_version: 1,
@@ -36,19 +71,19 @@ it.each(["panel", "judge", "resume"] as const)(
   (stage) => {
     expect(
       parseRejudgeResult(
-        result(`rejudge failed: ${stage} (model-studio/glm-5.2) failed: Bearer raw-secret`),
+        result(`rejudge failed: ${stage} (qwen-token-plan/glm-5.2) failed: Bearer raw-secret`),
         "fresh",
       ),
     ).toEqual({
       schema_version: 1,
       ok: false,
       stage,
-      model: "model-studio/glm-5.2",
+      model: "qwen-token-plan/glm-5.2",
       message: "Rejudge execution failed",
     });
     expect(
       parseRejudgeResult(
-        result(`rejudge failed: ${stage} (model-studio/glm-5.2) aborted`),
+        result(`rejudge failed: ${stage} (qwen-token-plan/glm-5.2) aborted`),
         "fresh",
       ),
     ).toMatchObject({ ok: false, stage });
@@ -90,7 +125,7 @@ import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, vi } from "vitest";
 import { createRejudgeEngine } from "../../src/review-engine/rejudge-engine.js";
-import { writeModelStudioConfig } from "../../src/config/model-studio.js";
+import { writeTokenPlanConfig } from "../../src/review-engine/token-plan-config.js";
 import { CENTRAL_CONFIG } from "../../src/config/central-config.js";
 import { installGitDiffShim } from "../../src/sandbox/git-diff-shim.js";
 vi.mock("node:child_process", async (importOriginal) => {
@@ -118,7 +153,7 @@ async function layout() {
   await writeFile(join(reviewRoot, "diff/pr.diff"), "");
   await writeFile(join(reviewRoot, "diff/numstat.txt"), "");
   await installGitDiffShim(reviewRoot, runtimeDir);
-  await writeModelStudioConfig(runtimeDir, "approved-workspace");
+  await writeTokenPlanConfig(runtimeDir);
   await writeFile(
     join(reviewRoot, ".rejudge/config.json"),
     JSON.stringify({
@@ -137,7 +172,10 @@ async function layout() {
 }
 function canaries() {
   for (const [key, value] of Object.entries({
-    QWEN_API_KEY: "qwen-canary",
+    QWEN_TOKEN_PLAN_API_KEY: "sk-sp-qwen-canary",
+    QWEN_API_KEY: "legacy-key-canary",
+    BAILIAN_TOKEN_PLAN_API_KEY: "bailian-key-canary",
+    ALIBABA_WORKSPACE_ID: "workspace-canary",
     GITHUB_TOKEN: "github-canary",
     LINEAR_CLIENT_SECRET: "linear-canary",
     LINEAR_CLIENT_ID: "linear-id",
@@ -152,6 +190,8 @@ async function childFixture(dir: string, code: string) {
   vi.mocked(nodeSpawn).mockImplementation((...args: Parameters<typeof nodeSpawn>) => {
     expect(args[0]).toBe(process.execPath);
     expect(args[1]).toHaveLength(1);
+    expect(args[1]).not.toContain("--unsafe");
+    expect(args[1]).not.toContain("--full");
     expect(String(args[1]?.[0]).replaceAll("\\", "/")).toMatch(
       /\/src\/review-engine\/rejudge-worker\.js$/,
     );
@@ -167,7 +207,9 @@ it("receives a single real child response with no parent credentials or Node inj
   );
   const answer = await createRejudgeEngine().fresh(input);
   const observed = JSON.parse(answer.answer);
-  expect(observed.env.QWEN_API_KEY).toBe("qwen-canary");
+  expect(observed.env.QWEN_TOKEN_PLAN_API_KEY).toBe("sk-sp-qwen-canary");
+  for (const key of ["QWEN_API_KEY", "BAILIAN_TOKEN_PLAN_API_KEY", "ALIBABA_WORKSPACE_ID"])
+    expect(observed.env[key]).toBeUndefined();
   expect(observed.env.NODE_OPTIONS).toBeUndefined();
   expect(answer.answer).not.toMatch(
     /github-canary|linear-canary|linear-id|aws-canary|consumer-code/,
@@ -220,22 +262,29 @@ it("preserves owned stage/model failures but never carries raw child diagnostics
   const { dir, input } = await layout();
   await childFixture(
     dir,
-    "process.stderr.write('Bearer qwen-canary github-canary');process.stdout.write(JSON.stringify({schema_version:1,ok:false,stage:'judge',model:'model-studio/qwen3.8-max-0902',message:'provider qwen-canary'})+'\\n');",
+    "process.stderr.write('private-provider-body Bearer sk-sp-qwen-canary github-canary');process.stdout.write(JSON.stringify({schema_version:1,ok:false,stage:'judge',model:'qwen-token-plan/qwen3.8-max',message:'provider sk-sp-qwen-canary'})+'\\n');",
   );
   const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
   try {
     await expect(createRejudgeEngine().fresh(input)).rejects.toMatchObject({
       reason: "REJUDGE_JUDGE_FAILED",
       stage: "judge",
-      model: "model-studio/qwen3.8-max-0902",
+      model: "qwen-token-plan/qwen3.8-max",
       message: "REJUDGE_JUDGE_FAILED",
     });
-    expect(JSON.stringify(stderr.mock.calls)).not.toMatch(/qwen-canary|github-canary/);
+    expect(JSON.stringify(stderr.mock.calls)).not.toMatch(
+      /private-provider-body|sk-sp-qwen-canary|github-canary/,
+    );
   } finally {
     stderr.mockRestore();
   }
 });
-async function actualWorker(dir: string, input: { runtimeDir: string }, unconfined = false) {
+async function actualWorker(
+  dir: string,
+  input: { runtimeDir: string },
+  unconfined = false,
+  providerError?: string,
+) {
   const extension = pathToFileURL(
     createRequire(import.meta.url).resolve("rejudge/dist/extension.js"),
   ).href;
@@ -246,7 +295,7 @@ async function actualWorker(dir: string, input: { runtimeDir: string }, unconfin
  import {appendFileSync} from 'node:fs';import {join} from 'node:path';
  const trace=value=>appendFileSync(join(process.env.AI_PR_REVIEW_RUNTIME,'trace.jsonl'),JSON.stringify(value)+'\\n');
  export async function createAgentSession(options){
- process.stdout.write("UPSTREAM_PROGRESS qwen-canary");process.stderr.write("UPSTREAM_DIAGNOSTIC qwen-canary");
+ process.stdout.write("UPSTREAM_PROGRESS sk-sp-qwen-canary");process.stderr.write("UPSTREAM_DIAGNOSTIC sk-sp-qwen-canary");
  const {model,sessionManager:manager}=options;
  const messages=manager.getEntries().filter(e=>e.type==='message').map(e=>e.message);
  trace({event:'session',model:model.id,maxTokens:model.maxTokens,level:options.thinkingLevel,tools:options.tools,customTools:options.customTools.map(t=>t.name),resumed:messages.length>0,env:process.env,cwd:options.cwd});
@@ -254,6 +303,7 @@ async function actualWorker(dir: string, input: { runtimeDir: string }, unconfin
  trace({event:'prompt',model:model.id,text});
  const answer={role:'assistant',content:[{type:'text',text:'answer: '+text}],api:'openai-completions',provider:model.provider,model:model.id,usage:{input:1,output:1,cacheRead:0,cacheWrite:0,totalTokens:2,cost:{input:0,output:0,cacheRead:0,cacheWrite:0,total:0}},stopReason:'stop',timestamp:Date.now()};
  const user={role:'user',content:text,timestamp:Date.now()};manager.appendMessage(user);manager.appendMessage(answer);messages.push(user,answer);
+ if (${JSON.stringify(providerError)} !== undefined) { answer.stopReason='error'; answer.errorMessage=${JSON.stringify(providerError)}; }
  }}};
  }`;
   await writeFile(
@@ -297,6 +347,7 @@ it("executes shipped fresh and two judge-only resumes in the same confined runti
   );
   const engine = createRejudgeEngine();
   const fresh = await engine.fresh(input);
+  expect(fresh.run_id).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[a-z0-9]{1,8}$/);
   const repair = await engine.resume({ ...input, runId: fresh.run_id, prompt: "repair-request" });
   const closure = await engine.resume({ ...input, runId: fresh.run_id, prompt: "closure-request" });
   expect(fresh.answer).toContain("fresh-request");
@@ -329,19 +380,28 @@ it("executes shipped fresh and two judge-only resumes in the same confined runti
     .map((line) => JSON.parse(line));
   const prompts = events.filter((e) => e.event === "prompt");
   expect(prompts).toHaveLength(6);
-  expect(prompts.filter((e) => e.model !== "qwen3.8-max-0902")).toHaveLength(3);
+  expect(prompts.filter((e) => e.model !== "qwen3.8-max")).toHaveLength(3);
   const sessions = events.filter((e) => e.event === "session");
   expect(sessions).toHaveLength(12);
   for (const session of sessions) {
     expect(session.cwd).toBe(input.reviewRoot);
+    expect(session.maxTokens).toBe(session.model === "qwen3.8-max" ? 24576 : 32768);
+    expect(session.level).toBe(
+      session.model === "qwen3.8-max"
+        ? "xhigh"
+        : session.model === "qwen3.8-flash"
+          ? "medium"
+          : "high",
+    );
     expect(session.env.TMPDIR).toBe(join(input.runtimeDir, "tmp"));
     expect(session.env.PI_CODING_AGENT_DIR).toBe(join(input.runtimeDir, "pi-agent"));
     expect(session.env.AI_PR_REVIEW_RUNTIME).toBe(input.runtimeDir);
-    expect(session.env.QWEN_API_KEY).toBe("qwen-canary");
+    expect(session.env.QWEN_TOKEN_PLAN_API_KEY).toBe("sk-sp-qwen-canary");
     expect(session.tools).toEqual(
-      session.model === "qwen3.8-max-0902"
-        ? ["ask_panel"]
-        : ["read", "grep", "find", "ls", "git_diff"],
+      session.model === "qwen3.8-max" ? ["ask_panel"] : ["read", "grep", "find", "ls", "git_diff"],
+    );
+    expect(session.customTools).toEqual(
+      session.model === "qwen3.8-max" ? ["ask_panel"] : ["git_diff"],
     );
   }
   expect(sessions.filter((e) => e.resumed)).toHaveLength(8);
@@ -359,6 +419,47 @@ it("never treats a malformed resume as a fresh panel request", async () => {
   await expect(
     createRejudgeEngine().resume({ ...input, runId: undefined as unknown as string }),
   ).rejects.toMatchObject({ stage: "resume" });
+  expect(nodeSpawn).not.toHaveBeenCalled();
+});
+
+it("carries a real shipped provider failure through the worker without diagnostic bodies", async () => {
+  canaries();
+  const { dir, input } = await layout();
+  await actualWorker(dir, input, false, "429 insufficient_quota private-provider-body");
+  const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+  try {
+    await expect(createRejudgeEngine().fresh(input)).rejects.toMatchObject({
+      reason: "PROVIDER_QUOTA_EXHAUSTED",
+      stage: "panel",
+      message: "PROVIDER_QUOTA_EXHAUSTED",
+    });
+    expect(JSON.stringify(stderr.mock.calls)).not.toMatch(
+      /private-provider-body|insufficient_quota/,
+    );
+  } finally {
+    stderr.mockRestore();
+  }
+}, 30000);
+
+it("rejects unknown provider codes from the child protocol", async () => {
+  canaries();
+  const { dir, input } = await layout();
+  await childFixture(
+    dir,
+    "process.stdout.write(JSON.stringify({schema_version:1,ok:false,stage:'panel',model:null,message:'private',provider_reason:'PROVIDER_INVENTED'})+'\\n')",
+  );
+  await expect(createRejudgeEngine().fresh(input)).rejects.toMatchObject({
+    reason: "REJUDGE_PANEL_FAILED",
+  });
+});
+
+it("rejects a missing local key with a provider code before spawning", async () => {
+  canaries();
+  const { input } = await layout();
+  vi.stubEnv("QWEN_TOKEN_PLAN_API_KEY", undefined);
+  await expect(createRejudgeEngine().fresh(input)).rejects.toMatchObject({
+    reason: "PROVIDER_CONFIG_INVALID",
+  });
   expect(nodeSpawn).not.toHaveBeenCalled();
 });
 it("rejects a child failure whose stage is not a string", async () => {
@@ -403,7 +504,7 @@ it("redacts and bounds worker diagnostics while requiring matching fresh/resume 
   const diagnostic = vi.fn();
   parseRejudgeResult(
     result(
-      "rejudge failed: judge (model-studio/qwen3.8-max-0902) failed: qwen-canary " +
+      "rejudge failed: judge (qwen-token-plan/qwen3.8-max) failed: sk-sp-qwen-canary " +
         "x".repeat(10000),
     ),
     "fresh",
@@ -411,7 +512,7 @@ it("redacts and bounds worker diagnostics while requiring matching fresh/resume 
     diagnostic,
   );
   expect(diagnostic).toHaveBeenCalledOnce();
-  expect(diagnostic.mock.calls[0]![0]).not.toContain("qwen-canary");
+  expect(diagnostic.mock.calls[0]![0]).not.toContain("sk-sp-qwen-canary");
   expect(diagnostic.mock.calls[0]![0].length).toBeLessThanOrEqual(2048);
   expect(parseRejudgeResult(result("answer\n" + metadata), "resume", id)).toMatchObject({
     ok: false,

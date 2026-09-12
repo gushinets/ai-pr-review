@@ -13,11 +13,8 @@ on:
         required: false
         type: number
         default: 0
-      alibaba_workspace_id:
-        required: true
-        type: string
     secrets:
-      QWEN_API_KEY:
+      QWEN_TOKEN_PLAN_API_KEY:
         required: true
       LINEAR_CLIENT_ID:
         required: true
@@ -170,8 +167,7 @@ jobs:
         if: steps.prepare.outputs.action == 'EXECUTE'
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
-          ALIBABA_WORKSPACE_ID: ${{ inputs.alibaba_workspace_id }}
+          QWEN_TOKEN_PLAN_API_KEY: ${{ secrets.QWEN_TOKEN_PLAN_API_KEY }}
           REPOSITORY: ${{ needs.preflight.outputs.repository }}
           PR_NUMBER: ${{ needs.preflight.outputs.pr_number }}
           BASE_SHA: ${{ needs.preflight.outputs.base_sha }}

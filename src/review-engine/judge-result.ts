@@ -6,6 +6,10 @@ import {
 } from "../contracts/judge-result.js";
 import { buildJudgeOutputInstructions, buildJudgeRepairPrompt } from "../context/review-context.js";
 import type { RejudgeEngine } from "./rejudge-engine.js";
+import {
+  isProviderFailureReason,
+  type ProviderFailureReason,
+} from "../contracts/failure-reasons.js";
 
 export class JudgeProtocolError extends Error {
   readonly reason = "JUDGE_RESULT_INVALID";
@@ -15,10 +19,14 @@ export class JudgeProtocolError extends Error {
 }
 
 export class JudgeRepairError extends Error {
-  readonly reason = "JUDGE_REPAIR_FAILED";
+  readonly reason: "JUDGE_REPAIR_FAILED" | ProviderFailureReason;
   readonly repairAttempts = 1;
-  constructor(readonly runId: string) {
-    super("JUDGE_REPAIR_FAILED");
+  constructor(
+    readonly runId: string,
+    providerReason?: ProviderFailureReason,
+  ) {
+    super(providerReason ?? "JUDGE_REPAIR_FAILED");
+    this.reason = providerReason ?? "JUDGE_REPAIR_FAILED";
   }
 }
 
@@ -77,7 +85,8 @@ export async function getValidJudgeResult(
     const result = parseJudgeResult(repaired.answer);
     validateContext(result);
     return { result, runId: fresh.run_id, repairAttempts: 1 };
-  } catch {
-    throw new JudgeRepairError(fresh.run_id);
+  } catch (error) {
+    const reason = error instanceof Error && "reason" in error ? error.reason : undefined;
+    throw new JudgeRepairError(fresh.run_id, isProviderFailureReason(reason) ? reason : undefined);
   }
 }

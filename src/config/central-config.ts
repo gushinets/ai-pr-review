@@ -8,11 +8,11 @@ export const CENTRAL_CONFIG = Object.freeze({
   artifactRetentionDays: 90,
   reviewTimeoutMs: 20 * 60 * 1000,
   reviewers: [
-    { model: "model-studio/qwen3.8-flash", level: "medium", maxTokens: 32_768 },
-    { model: "model-studio/deepseek-v4-pro-0813", level: "high", maxTokens: 32_768 },
-    { model: "model-studio/glm-5.2", level: "high", maxTokens: 32_768 },
+    { model: "qwen-token-plan/qwen3.8-flash", level: "medium", maxTokens: 32_768 },
+    { model: "qwen-token-plan/deepseek-v4-pro-0813", level: "high", maxTokens: 32_768 },
+    { model: "qwen-token-plan/glm-5.2", level: "high", maxTokens: 32_768 },
   ],
-  judge: { model: "model-studio/qwen3.8-max-0902", level: "high", maxTokens: 24_576 },
+  judge: { model: "qwen-token-plan/qwen3.8-max", level: "xhigh", maxTokens: 24_576 },
   summaryMarker: "<!-- ai-pr-review-summary:v1 -->",
   findingMarkerPrefix: "ai-pr-review-finding:v1",
 } as const);

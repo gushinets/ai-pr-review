@@ -3,9 +3,17 @@ import { isAbsolute, join, relative, sep } from "node:path";
 import Schema from "typebox/schema";
 import { Type } from "typebox";
 import { CENTRAL_CONFIG } from "../config/central-config.js";
-import { writeModelStudioConfig } from "../config/model-studio.js";
+import {
+  assertTokenPlanRuntimeContract,
+  writeTokenPlanConfig,
+} from "../review-engine/token-plan-config.js";
+import { buildWorkerEnv } from "../sandbox/worker-env.js";
 import { loadRepoConfigAtBase } from "../config/repo-config.js";
-import { UNABLE_REASONS, type UnableReason } from "../contracts/failure-reasons.js";
+import {
+  UNABLE_REASONS,
+  isProviderFailureReason,
+  type UnableReason,
+} from "../contracts/failure-reasons.js";
 import {
   ReviewContextV1Schema,
   validateReviewContext,
@@ -89,7 +97,6 @@ export interface PrepareDependencies {
 }
 export interface ExecuteDependencies {
   github: Pick<GithubReadClient, "getPullRequest">;
-  workspaceId: string;
   engine?: RejudgeEngine;
   secretValues?: string[];
   warn?: (warning: string) => void;
@@ -544,7 +551,10 @@ export async function executeReview(
     };
     const moved = await current(input, dependencies.github);
     if (moved) return moved;
-    await writeModelStudioConfig(runtimeDir, dependencies.workspaceId);
+    stage = "PROVIDER_CONFIG_INVALID";
+    assertTokenPlanRuntimeContract();
+    await buildWorkerEnv({ reviewRoot, runtimeDir });
+    await writeTokenPlanConfig(runtimeDir);
     const engine =
       dependencies.engine ??
       createRejudgeEngine({
@@ -556,6 +566,7 @@ export async function executeReview(
         model_id: model.model,
         requested_reasoning: model.level,
         effective_reasoning: null,
+        provider_reported_model_id: null,
       }),
     );
     stage = "REJUDGE_JUDGE_FAILED";
@@ -620,8 +631,9 @@ export async function executeReview(
     }
   } catch (error) {
     state.outcome = "UNABLE_TO_REVIEW";
-    state.unable_reason =
-      stage === "CLOSURE_FAILED"
+    state.unable_reason = isProviderFailureReason(failureReason(error, stage))
+      ? failureReason(error, stage)
+      : stage === "CLOSURE_FAILED"
         ? "CLOSURE_FAILED"
         : error instanceof ResolutionProtocolError
           ? "CLOSURE_RESULT_INVALID"

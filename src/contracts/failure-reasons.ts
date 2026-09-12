@@ -11,6 +11,11 @@ export type UnableReason =
   | "CI_CONTEXT_UNAVAILABLE"
   | "SNAPSHOT_FAILED"
   | "STATE_LOAD_FAILED"
+  | "PROVIDER_CONFIG_INVALID"
+  | "PROVIDER_AUTH_FAILED"
+  | "PROVIDER_RATE_LIMITED"
+  | "PROVIDER_QUOTA_EXHAUSTED"
+  | "PROVIDER_UNAVAILABLE"
   | "REJUDGE_PANEL_FAILED"
   | "REJUDGE_JUDGE_FAILED"
   | "JUDGE_RESULT_INVALID"
@@ -32,6 +37,11 @@ export const UNABLE_REASONS = [
   "CI_CONTEXT_UNAVAILABLE",
   "SNAPSHOT_FAILED",
   "STATE_LOAD_FAILED",
+  "PROVIDER_CONFIG_INVALID",
+  "PROVIDER_AUTH_FAILED",
+  "PROVIDER_RATE_LIMITED",
+  "PROVIDER_QUOTA_EXHAUSTED",
+  "PROVIDER_UNAVAILABLE",
   "REJUDGE_PANEL_FAILED",
   "REJUDGE_JUDGE_FAILED",
   "JUDGE_RESULT_INVALID",
@@ -40,3 +50,12 @@ export const UNABLE_REASONS = [
   "CLOSURE_RESULT_INVALID",
   "INTERNAL_ERROR",
 ] as const satisfies readonly UnableReason[];
+
+export type ProviderFailureReason = Extract<UnableReason, `PROVIDER_${string}`>;
+export function isProviderFailureReason(value: unknown): value is ProviderFailureReason {
+  return (
+    typeof value === "string" &&
+    value.startsWith("PROVIDER_") &&
+    UNABLE_REASONS.includes(value as UnableReason)
+  );
+}

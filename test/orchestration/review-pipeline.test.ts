@@ -40,9 +40,11 @@ const block: JudgeResultV1 = {
 };
 const temps: string[] = [];
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await Promise.all(temps.splice(0).map((p) => rm(p, { recursive: true, force: true })));
 });
 async function fixture() {
+  vi.stubEnv("QWEN_TOKEN_PLAN_API_KEY", "sk-sp-test-key");
   const workDir = await mkdtemp(join(tmpdir(), "review-pipeline-"));
   temps.push(workDir);
   const identity = {
@@ -137,7 +139,7 @@ async function fixture() {
     })),
   };
   const prepare = { github, loadState, loadRequirements, secretValues: ["secret-canary"] };
-  const execute = { github, engine, workspaceId: "workspace", secretValues: ["qwen-canary"] };
+  const execute = { github, engine, secretValues: ["sk-sp-test-key"] };
   return {
     workDir,
     preflight,
@@ -360,6 +362,7 @@ it.each(["resolved", "invalidated", "still_present", "uncertain"] as const)(
 it.each(
   UNABLE_REASONS.filter(
     (r) =>
+      !r.startsWith("PROVIDER_") &&
       ![
         "SNAPSHOT_FAILED",
         "REJUDGE_PANEL_FAILED",
@@ -457,17 +460,55 @@ it("fails state discovery closed before loading private inputs", async () => {
   expect(f.loadRequirements).not.toHaveBeenCalled();
   expect(f.engine.fresh).not.toHaveBeenCalled();
 });
-it.each(["", "bad/workspace"])("rejects workspace %j before any model", async (workspaceId) => {
+it.each(["", "sk-payg-key"])("rejects key %j before any model", async (key) => {
   const f = await fixture();
   await prepareReview({ preflight: f.preflight, workDir: f.workDir }, f.prepare);
+  vi.stubEnv("QWEN_TOKEN_PLAN_API_KEY", key);
   expect(
-    await executeReview(
-      { preflight: f.preflight, workDir: f.workDir },
-      { ...f.execute, workspaceId },
-    ),
-  ).toMatchObject({ state: { outcome: "UNABLE_TO_REVIEW" } });
+    await executeReview({ preflight: f.preflight, workDir: f.workDir }, f.execute),
+  ).toMatchObject({
+    state: { outcome: "UNABLE_TO_REVIEW", unable_reason: "PROVIDER_CONFIG_INVALID" },
+  });
   expect(f.engine.fresh).not.toHaveBeenCalled();
 });
+
+it.each(["fresh", "repair", "closure"] as const)(
+  "preserves provider reasons during %s without persisting bodies",
+  async (phase) => {
+    const f = await fixture();
+    const error = new RejudgeEngineError(
+      phase === "fresh" ? "panel" : "resume",
+      "qwen-token-plan/glm-5.2",
+      "PROVIDER_RATE_LIMITED",
+    );
+    if (phase === "fresh") f.engine.fresh.mockRejectedValue(error);
+    else {
+      if (phase === "repair")
+        f.engine.fresh.mockResolvedValue({ answer: "not json", run_id: runId });
+      else
+        f.loadState.mockResolvedValue({
+          kind: "fresh",
+          previous: state(f),
+          history: [],
+          rerunnable: null,
+        });
+      f.engine.resume.mockRejectedValue(error);
+    }
+    const result = await runReviewPipeline(
+      { preflight: f.preflight, workDir: f.workDir },
+      f.prepare,
+      f.execute,
+    );
+    expect(result).toMatchObject({
+      state: {
+        outcome: "UNABLE_TO_REVIEW",
+        unable_reason: "PROVIDER_RATE_LIMITED",
+        telemetry: { estimated_cost_usd: null, judge_repair_attempts: phase === "repair" ? 1 : 0 },
+      },
+    });
+    expect(f.calls.at(-1)).toBe("head");
+  },
+);
 
 it.each([
   "CONFIG_MISSING",

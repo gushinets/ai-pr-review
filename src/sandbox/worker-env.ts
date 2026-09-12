@@ -7,7 +7,8 @@ export async function buildWorkerEnv(
   parent: NodeJS.ProcessEnv = process.env,
 ): Promise<NodeJS.ProcessEnv> {
   const { reviewRoot: root, runtimeDir: runtime } = input;
-  if (!parent.QWEN_API_KEY?.trim()) throw new Error("QWEN_API_KEY_REQUIRED");
+  if (!/^sk-sp-[A-Za-z0-9._-]+$/.test(parent.QWEN_TOKEN_PLAN_API_KEY ?? ""))
+    throw new Error("PROVIDER_CONFIG_INVALID");
   if (
     !isAbsolute(root) ||
     !isAbsolute(runtime) ||
@@ -46,7 +47,7 @@ export async function buildWorkerEnv(
     TMPDIR: join(runtime, "tmp"),
     AI_PR_REVIEW_ROOT: root,
     AI_PR_REVIEW_RUNTIME: runtime,
-    QWEN_API_KEY: parent.QWEN_API_KEY,
+    QWEN_TOKEN_PLAN_API_KEY: parent.QWEN_TOKEN_PLAN_API_KEY,
     PI_OFFLINE: "1",
     PI_SKIP_VERSION_CHECK: "1",
     PI_TELEMETRY: "0",

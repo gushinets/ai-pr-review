@@ -91,15 +91,21 @@ describe("central reusable workflow security contract", () => {
       mode: { required: true, type: "string" },
       triggering_run_id: { required: false, type: "string", default: "" },
       pr_number: { required: false, type: "number", default: 0 },
-      alibaba_workspace_id: { required: true, type: "string" },
     });
     expect(flow.on.workflow_call!.secrets).toEqual({
-      QWEN_API_KEY: { required: true },
+      QWEN_TOKEN_PLAN_API_KEY: { required: true },
       LINEAR_CLIENT_ID: { required: true },
       LINEAR_CLIENT_SECRET: { required: true },
     });
     expect(flow.permissions).toEqual({});
     expect(flow.env).toBeUndefined();
+    expect(JSON.stringify(flow)).not.toMatch(
+      /alibaba_workspace_id|ALIBABA_WORKSPACE_ID|QWEN_API_KEY|BAILIAN_TOKEN_PLAN_API_KEY/,
+    );
+    for (const job of Object.values(flow.jobs)) {
+      for (const item of job.steps.filter((item) => item.id !== "execute"))
+        expect(JSON.stringify(item)).not.toContain("QWEN_TOKEN_PLAN_API_KEY");
+    }
     expect(JSON.stringify(flow)).not.toMatch(/secrets[^\n]*inherit/);
     expect(Object.keys(flow.jobs)).toEqual(["preflight", "review", "publisher"]);
   });
@@ -170,8 +176,7 @@ describe("central reusable workflow security contract", () => {
     expect(JSON.stringify(prepare.env)).not.toMatch(/QWEN|ALIBABA/);
     expect(execute.env).toMatchObject({
       GITHUB_TOKEN: "${{ github.token }}",
-      QWEN_API_KEY: "${{ secrets.QWEN_API_KEY }}",
-      ALIBABA_WORKSPACE_ID: "${{ inputs.alibaba_workspace_id }}",
+      QWEN_TOKEN_PLAN_API_KEY: "${{ secrets.QWEN_TOKEN_PLAN_API_KEY }}",
     });
     expect(JSON.stringify(execute.env)).not.toMatch(/LINEAR_CLIENT/);
     const bootstrap = step(review!, "search-tools");

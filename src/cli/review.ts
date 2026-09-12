@@ -73,18 +73,22 @@ export async function runCli(
         !UNABLE_REASONS.includes(values["unable-reason"] as UnableReason))
     )
       return 70;
-    const forbidden =
-      phase === "prepare"
-        ? ["QWEN_API_KEY", "ALIBABA_WORKSPACE_ID"]
+    const forbidden = [
+      "QWEN_API_KEY",
+      "BAILIAN_TOKEN_PLAN_API_KEY",
+      "ALIBABA_WORKSPACE_ID",
+      ...(phase === "prepare"
+        ? ["QWEN_TOKEN_PLAN_API_KEY"]
         : phase === "execute"
           ? ["LINEAR_CLIENT_ID", "LINEAR_CLIENT_SECRET"]
-          : ["LINEAR_CLIENT_ID", "LINEAR_CLIENT_SECRET", "QWEN_API_KEY", "ALIBABA_WORKSPACE_ID"];
+          : ["LINEAR_CLIENT_ID", "LINEAR_CLIENT_SECRET", "QWEN_TOKEN_PLAN_API_KEY"]),
+    ];
     if (
       forbidden.some((key) => env[key] !== undefined) ||
       !env.GITHUB_TOKEN?.trim() ||
       (phase === "prepare" &&
         (!env.LINEAR_CLIENT_ID?.trim() || !env.LINEAR_CLIENT_SECRET?.trim())) ||
-      (phase === "execute" && !env.QWEN_API_KEY?.trim())
+      (phase === "execute" && !env.QWEN_TOKEN_PLAN_API_KEY?.trim())
     )
       return 70;
     const workDir = values["work-dir"],
@@ -153,7 +157,7 @@ export async function runCli(
       env.GITHUB_TOKEN,
       env.LINEAR_CLIENT_ID,
       env.LINEAR_CLIENT_SECRET,
-      env.QWEN_API_KEY,
+      env.QWEN_TOKEN_PLAN_API_KEY,
     ].filter((v): v is string => !!v);
     const warn = (warning: string) => process.stderr.write(`${warning}\n`);
     let result: ReviewPipelineResult | { kind: "PREPARED" },
@@ -182,7 +186,6 @@ export async function runCli(
     } else if (phase === "execute")
       result = await executeReview(input, {
         github,
-        workspaceId: env.ALIBABA_WORKSPACE_ID ?? "",
         secretValues,
         warn,
       });

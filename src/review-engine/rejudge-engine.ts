@@ -1,7 +1,11 @@
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { CENTRAL_CONFIG } from "../config/central-config.js";
-import type { UnableReason } from "../contracts/failure-reasons.js";
+import {
+  isProviderFailureReason,
+  type ProviderFailureReason,
+  type UnableReason,
+} from "../contracts/failure-reasons.js";
 import { buildWorkerEnv } from "../sandbox/worker-env.js";
 import {
   parseWorkerRequest,
@@ -26,12 +30,18 @@ export interface RejudgeEngine {
   resume(input: RunInput & { runId: string }): Promise<RejudgeRun>;
 }
 export class RejudgeEngineError extends Error {
-  readonly reason: Extract<UnableReason, "REJUDGE_PANEL_FAILED" | "REJUDGE_JUDGE_FAILED">;
+  readonly reason:
+    Extract<UnableReason, "REJUDGE_PANEL_FAILED" | "REJUDGE_JUDGE_FAILED"> | ProviderFailureReason;
   readonly stage: "setup" | "panel" | "judge" | "resume";
   readonly model: string | null;
-  constructor(stage: "setup" | "panel" | "judge" | "resume", model: string | null = null) {
+  constructor(
+    stage: "setup" | "panel" | "judge" | "resume",
+    model: string | null = null,
+    providerReason?: ProviderFailureReason,
+  ) {
     const reason =
-      stage === "setup" || stage === "panel" ? "REJUDGE_PANEL_FAILED" : "REJUDGE_JUDGE_FAILED";
+      providerReason ??
+      (stage === "setup" || stage === "panel" ? "REJUDGE_PANEL_FAILED" : "REJUDGE_JUDGE_FAILED");
     super(reason);
     this.reason = reason;
     this.stage = stage;
@@ -48,7 +58,14 @@ function parseResponse(text: string): RejudgeWorkerResponse {
   const keys =
     v.ok === true
       ? ["schema_version", "ok", "answer", "run_id"]
-      : ["schema_version", "ok", "stage", "model", "message"];
+      : [
+          "schema_version",
+          "ok",
+          "stage",
+          "model",
+          "message",
+          ...(v.provider_reason === undefined ? [] : ["provider_reason"]),
+        ];
   if (
     v.schema_version !== 1 ||
     Object.keys(v).length !== keys.length ||
@@ -67,7 +84,8 @@ function parseResponse(text: string): RejudgeWorkerResponse {
     typeof v.stage === "string" &&
     ["setup", "panel", "judge", "resume"].includes(v.stage) &&
     (v.model === null || typeof v.model === "string") &&
-    typeof v.message === "string"
+    typeof v.message === "string" &&
+    (v.provider_reason === undefined || isProviderFailureReason(v.provider_reason))
   )
     return v as RejudgeWorkerResponse;
   throw new Error("INVALID_WORKER_RESPONSE");
@@ -160,7 +178,14 @@ export function createRejudgeEngine(
           child.on("close", (code) => {
             clean();
             // Never persist provider errors or expose child output in the owned error object.
-            if (stderr && !oversized) process.stderr.write(safeWorkerDiagnostic(stderr) + "\n");
+            if (stderr && !oversized) {
+              const code = stderr.trim();
+              process.stderr.write(
+                (isProviderFailureReason(code) || code === "PI_CONFINEMENT_CONTRACT_FAILED"
+                  ? code
+                  : "Rejudge worker diagnostic") + "\n",
+              );
+            }
             if (code !== 0 || childError || oversized || controller.signal.aborted) {
               reject(fail());
               return;
@@ -181,11 +206,14 @@ export function createRejudgeEngine(
         throw new RejudgeEngineError(
           response.stage,
           response.model === null ? null : safeWorkerDiagnostic(response.model),
+          response.provider_reason,
         );
       if (runId !== undefined && response.run_id !== runId) throw fail();
       attempt.runId = response.run_id;
       return { answer: response.answer, run_id: response.run_id };
     } catch (error) {
+      if (error instanceof Error && error.message === "PROVIDER_CONFIG_INVALID")
+        throw new RejudgeEngineError(stage, null, "PROVIDER_CONFIG_INVALID");
       throw error instanceof RejudgeEngineError ? error : fail();
     } finally {
       attempt.busy = false;
