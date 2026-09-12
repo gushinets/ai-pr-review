@@ -39,6 +39,66 @@ export async function loadPiFilesystemTools(
   };
 }
 
+interface PiModelRuntime {
+  getError: () => unknown;
+  getModel: (
+    provider: string,
+    id: string,
+  ) =>
+    | {
+        provider?: string;
+        baseUrl?: string;
+        reasoning?: boolean;
+        thinkingLevelMap?: Record<string, string | null>;
+        maxTokens?: number;
+      }
+    | undefined;
+}
+
+export async function loadPiModelRuntime(modelsPath: string): Promise<PiModelRuntime> {
+  const url = import.meta.resolve("@earendil-works/pi-coding-agent");
+  const namespace: unknown = await import(url);
+  if (typeof namespace !== "object" || namespace === null || !("ModelRuntime" in namespace))
+    throw new Error("PI_RUNTIME_INCOMPATIBLE");
+  const ModelRuntime = namespace.ModelRuntime;
+  if (
+    (typeof ModelRuntime !== "object" && typeof ModelRuntime !== "function") ||
+    ModelRuntime === null ||
+    !("create" in ModelRuntime)
+  )
+    throw new Error("PI_RUNTIME_INCOMPATIBLE");
+  const create = ModelRuntime.create;
+  if (typeof create !== "function") throw new Error("PI_RUNTIME_INCOMPATIBLE");
+  const runtime: unknown = await create({
+    credentials: {
+      read: () => {
+        throw new Error("UNEXPECTED_AUTH_READ");
+      },
+      list: () => {
+        throw new Error("UNEXPECTED_AUTH_LIST");
+      },
+      modify: () => {
+        throw new Error("UNEXPECTED_AUTH_WRITE");
+      },
+      delete: () => {
+        throw new Error("UNEXPECTED_AUTH_DELETE");
+      },
+    },
+    modelsPath,
+    allowModelNetwork: false,
+    refreshOnCreate: false,
+  });
+  if (
+    typeof runtime !== "object" ||
+    runtime === null ||
+    !("getError" in runtime) ||
+    typeof runtime.getError !== "function" ||
+    !("getModel" in runtime) ||
+    typeof runtime.getModel !== "function"
+  )
+    throw new Error("PI_RUNTIME_INCOMPATIBLE");
+  return runtime as PiModelRuntime;
+}
 export async function assertPiConfinementContract(reviewRoot: string): Promise<void> {
   const failure = () => new Error("PI_CONFINEMENT_CONTRACT_FAILED");
   const configured = process.env.AI_PR_REVIEW_ROOT;

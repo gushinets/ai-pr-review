@@ -34,7 +34,10 @@ import {
   TOKEN_PLAN_PROVIDER_ID,
 } from "../review-engine/token-plan-config.js";
 import { computeFinalVerdict, computeFreshVerdict } from "../review-engine/verdict.js";
-import { assertPiConfinementContract } from "../sandbox/pi-confinement-contract.js";
+import {
+  loadPiModelRuntime,
+  assertPiConfinementContract,
+} from "../sandbox/pi-confinement-contract.js";
 
 type Scenario = "good" | "bad" | "repair" | "closure";
 interface SmokeResult {
@@ -190,7 +193,6 @@ export async function assertPromotionRuntime(input: {
     const metadata = JSON.parse(await readFile(selected, "utf8"));
     assert.equal(metadata.name, name);
     assert.equal(metadata.version, "0.85.1");
-
   }
   const config = JSON.parse(await readFile(join(input.runtimeDir, "pi-agent/models.json"), "utf8"));
   assert.deepEqual(Object.keys(config), ["providers"]);
@@ -207,27 +209,7 @@ export async function assertPromotionRuntime(input: {
   assert.equal(provider.models[0].maxTokens, 32768);
   assert.equal(provider.models[0].apiKey, undefined);
   assert.equal(provider.models[0].headers, undefined);
-  const pi = await import(import.meta.resolve("@earendil-works/pi-coding-agent"));
-  const credentials = {
-    read: () => {
-      throw new Error("UNEXPECTED_AUTH_READ");
-    },
-    list: () => {
-      throw new Error("UNEXPECTED_AUTH_LIST");
-    },
-    modify: () => {
-      throw new Error("UNEXPECTED_AUTH_WRITE");
-    },
-    delete: () => {
-      throw new Error("UNEXPECTED_AUTH_DELETE");
-    },
-  };
-  const runtime = await pi.ModelRuntime.create({
-    credentials,
-    modelsPath: join(input.runtimeDir, "pi-agent/models.json"),
-    allowModelNetwork: false,
-    refreshOnCreate: false,
-  });
+  const runtime = await loadPiModelRuntime(join(input.runtimeDir, "pi-agent/models.json"));
   assert.equal(runtime.getError(), undefined);
   for (const { model, level, maxTokens } of panel) {
     const id = model.split("/")[1]!;
