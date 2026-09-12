@@ -4,6 +4,36 @@ const id = "2026-09-11T01-02-03-004Z-abc123";
 const metadata = `Run ID: ${id}. Follow up with resumeRunId: "${id}".`;
 const result = (text: string) => ({ content: [{ type: "text", text }] });
 it.each([
+  ["403 insufficient_quota", "PROVIDER_QUOTA_EXHAUSTED"],
+  ["403 Forbidden insufficient_quota", "PROVIDER_QUOTA_EXHAUSTED"],
+  ["403 credits exhausted", "PROVIDER_QUOTA_EXHAUSTED"],
+  ["403 RESOURCE_EXHAUSTED", "PROVIDER_QUOTA_EXHAUSTED"],
+  ["403", "PROVIDER_AUTH_FAILED"],
+  ["403 invalid_api_key insufficient_quota", "PROVIDER_AUTH_FAILED"],
+  ["403 authentication_error credits exhausted", "PROVIDER_AUTH_FAILED"],
+])("prioritizes explicit provider codes over HTTP status: %s", (detail, reason) => {
+  const diagnostic = vi.fn();
+  expect(
+    parseRejudgeResult(
+      result(
+        "rejudge failed: panel (qwen-token-plan/glm-5.2) failed: did not complete cleanly (stopReason: error): " +
+          detail,
+      ),
+      "fresh",
+      undefined,
+      diagnostic,
+    ),
+  ).toEqual({
+    schema_version: 1,
+    ok: false,
+    stage: "panel",
+    model: "qwen-token-plan/glm-5.2",
+    message: "Rejudge execution failed",
+    provider_reason: reason,
+  });
+  expect(diagnostic.mock.calls).toEqual([[reason]]);
+});
+it.each([
   ["401 Unauthorized", "PROVIDER_AUTH_FAILED"],
   ["403 Forbidden", "PROVIDER_AUTH_FAILED"],
   ["invalid_api_key", "PROVIDER_AUTH_FAILED"],

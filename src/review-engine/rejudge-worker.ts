@@ -45,14 +45,14 @@ function providerFailure(model: string, detail: string): ProviderFailureReason |
     !/^(?:empty-output retry )?did not complete cleanly \(stopReason: error\)(?::|$)/.test(detail)
   )
     return undefined;
-  if (/\b(?:401|403|invalid_api_key|authentication_error|unauthorized|forbidden)\b/i.test(detail))
-    return "PROVIDER_AUTH_FAILED";
+  if (/\b(?:invalid_api_key|authentication_error)\b/i.test(detail)) return "PROVIDER_AUTH_FAILED";
   if (
     /\b(?:insufficient_quota|resource[_ -]exhausted)\b|\b(?:quota|credits?)\b.{0,40}\b(?:exhausted|depleted|insufficient|exceeded)\b|\binsufficient\s+(?:quota|credits?)\b/i.test(
       detail,
     )
   )
     return "PROVIDER_QUOTA_EXHAUSTED";
+  if (/\b(?:401|403|unauthorized|forbidden)\b/i.test(detail)) return "PROVIDER_AUTH_FAILED";
   if (/\b429\b/.test(detail)) return "PROVIDER_RATE_LIMITED";
   return "PROVIDER_UNAVAILABLE";
 }
