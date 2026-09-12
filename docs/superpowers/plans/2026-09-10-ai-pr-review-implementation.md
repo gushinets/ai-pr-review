@@ -80,7 +80,7 @@ All remaining work begins with Task 16A below.
 package.json
 package-lock.json
 patches/
-  @earendil-works+pi-coding-agent+<PIN>.patch   # stays 0.85.1 if compatibility gate passes
+  @earendil-works+pi-coding-agent+0.85.1.patch
 src/
   config/
     central-config.ts
@@ -155,7 +155,7 @@ docs/
 - Modify: `test/orchestration/review-pipeline.test.ts`
 - Modify: `test/cli/review.test.ts`
 - Modify: `test/workflows/reusable-ai-pr-review.test.ts`
-- Modify if Pi pin changes: `patches/@earendil-works+pi-coding-agent+<PIN>.patch`
+- Existing patch remains: `patches/@earendil-works+pi-coding-agent+0.85.1.patch`; if the Pi 0.85.1 compatibility gate fails, stop before changing this path and amend the plan with the exact replacement Pi version.
 
 **Interfaces:**
 - Consumes: approved Token Plan spec, existing Tasks 1-16 implementation, `QWEN_TOKEN_PLAN_API_KEY`, exact npm package `rejudge@0.4.1`.
@@ -549,7 +549,7 @@ Inline blocking finding:
 Material miss after AI PASS requires an authorized user's exact marker:
 
 ```html
-<!-- ai-pr-review-material-miss:v1:<40-hex-head-sha> -->
+<!-- ai-pr-review-material-miss:v1:${headSha} -->
 ```
 
 Do not infer misses from arbitrary discussion prose.
@@ -706,7 +706,7 @@ Before real model calls, the smoke must assert:
 
 ```text
 installed Rejudge version == 0.4.1
-selected exact Pi version == the Task 16A final pin
+selected exact Pi version == 0.85.1
 Pi confinement attestation passes
 provider id == qwen-token-plan
 provider base URL == fixed Singapore endpoint
@@ -716,9 +716,11 @@ reviewer levels medium/high/high and judge xhigh are representable by the final 
 32k reviewer / 24k judge maxTokens are the active central ceilings
 ```
 
+If Task 16A stopped because Pi `0.85.1` was incompatible, this Task 18 text must be amended together with Task 16A before execution; do not silently substitute another Pi version.
+
 - [ ] **Step 5: Add the manual promotion workflow**
 
-`.github/workflows/promotion-smoke.yml` uses `workflow_dispatch` only and `permissions: contents: read`. Pin checkout/setup-node actions exactly as central CI does. Use `ubuntu-24.04`.
+`.github/workflows/promotion-smoke.yml` uses `workflow_dispatch` only and `permissions: contents: read`. Pin checkout/setup-node actions exactly as central CI does. Use `ubuntu-24.04` and `timeout-minutes: 60`.
 
 Trusted bootstrap:
 
@@ -739,7 +741,7 @@ Only the smoke command receives:
 QWEN_TOKEN_PLAN_API_KEY: ${{ secrets.QWEN_TOKEN_PLAN_API_KEY }}
 ```
 
-There is no `ALIBABA_WORKSPACE_ID`, legacy `QWEN_API_KEY`, Linear secret, PAT, or GitHub write permission. Set a workflow timeout large enough to run the sequential smoke scenarios, while every individual production-engine invocation keeps the 20-minute review deadline.
+There is no `ALIBABA_WORKSPACE_ID`, legacy `QWEN_API_KEY`, Linear secret, PAT, or GitHub write permission. Every individual production-engine invocation keeps the 20-minute review deadline.
 
 Add script:
 
@@ -833,7 +835,7 @@ policy:
   scoped: []
 ```
 
-`caller.yml` pins the frozen Task 18 `ENGINE_CANDIDATE_SHA` as one literal 40-hex `uses:` ref. It forwards only:
+Read `ENGINE_CANDIDATE_SHA` from the successful Task 18 promotion evidence, validate it with `^[0-9a-f]{40}$`, and write that exact literal once into `fixtures/github-e2e/caller.yml` as the reusable workflow `uses:` ref. It forwards only:
 
 ```text
 QWEN_TOKEN_PLAN_API_KEY
@@ -966,10 +968,10 @@ Validate every referenced policy file exists on `main` before merge.
 
 Use `workflow_run` for `[baseline-backend]` completed plus manual `workflow_dispatch` with `pr_number`. Keep one caller job with concurrency/cancel behavior from the existing design.
 
-The job must use:
+Read the only 40-hex central SHA from `fixtures/github-e2e/caller.yml`, assert it equals the Task 18 promoted SHA recorded in `fixtures/github-e2e/README.md`, then write that exact literal into the Platform reusable-workflow `uses:` ref. The committed `uses:` value must match:
 
-```text
-gushinets/ai-pr-review/.github/workflows/reusable-ai-pr-review.yml@<literal frozen 40-hex SHA>
+```regex
+^gushinets/ai-pr-review/.github/workflows/reusable-ai-pr-review\.yml@[0-9a-f]{40}$
 ```
 
 Inputs are only the central workflow's `mode`, `triggering_run_id`, and `pr_number`. Do not pass `engine_sha`, `alibaba_workspace_id`, provider URL, region, or model list.
@@ -1054,7 +1056,7 @@ Validate every referenced file exists on `main`.
 
 - [ ] **Step 2: Add the thin caller with the same literal proven engine SHA**
 
-Use `workflow_run` for `[CI]` completed plus manual `workflow_dispatch` with `pr_number`. The reusable `uses:` ref contains the same literal 40-hex SHA proven by Tasks 18-19.
+Use `workflow_run` for `[CI]` completed plus manual `workflow_dispatch` with `pr_number`. Read the exact central SHA from `fixtures/github-e2e/caller.yml`, assert it matches the Task 18 promotion record, and write that same literal into the Payments reusable-workflow `uses:` ref.
 
 Inputs are only `mode`, `triggering_run_id`, and `pr_number`; no duplicate `engine_sha`, no workspace/provider inputs.
 
