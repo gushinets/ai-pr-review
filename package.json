@@ -18,7 +18,8 @@
     "cli:preflight": "node dist/src/cli/preflight.js",
     "cli:review": "node dist/src/cli/review.js",
     "cli:publish": "node dist/src/cli/publish.js",
-    "cli:calibration": "node dist/src/cli/calibration-report.js"
+    "cli:calibration": "node dist/src/cli/calibration-report.js",
+    "cli:promotion-smoke": "node dist/src/cli/promotion-smoke.js"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "0.85.1",

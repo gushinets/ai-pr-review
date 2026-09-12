@@ -1,0 +1,6 @@
+{
+  "identifier": "SMOKE-GOOD",
+  "title": "Implement subtraction",
+  "description": "subtract(a, b) must return a - b for ordinary numeric inputs.",
+  "comments": []
+}
