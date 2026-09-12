@@ -1,19 +1,19 @@
 # AI PR Review - Design Specification
 
-Status: Approved for implementation  
+Status: Approved design; implementation plan synchronization pending  
 Date: 2026-09-10  
-Last updated: 2026-09-11 - Pi/Rejudge runtime clarification  
+Last updated: 2026-09-12 - Token Plan provider and Rejudge baseline amendment  
 Target repository: `gushinets/ai-pr-review`  
-Initial consumer repositories: `gushinets/anytoolai-platform`, `gushinets/payments-portal`
-Companion implementation plan: `docs/superpowers/plans/2026-09-10-ai-pr-review-implementation.md`
+Initial consumer repositories: `gushinets/anytoolai-platform`, `gushinets/payments-portal`  
+Companion implementation plan: `docs/superpowers/plans/2026-09-10-ai-pr-review-implementation.md` (must be synchronized with this amendment before further execution)
 
 ## 1. Purpose
 
 `ai-pr-review` is a centralized, GitHub-native automated pull-request review system for AnyToolAI repositories. It runs after the repository's primary CI workflow finishes for an exact PR head SHA, gathers trusted repository policy, Linear requirements, CI evidence, and the PR code snapshot, then runs a multi-model Rejudge panel. A deterministic wrapper validates the model output, computes the final machine verdict, persists sanitized canonical state as a GitHub Actions artifact, and publishes a check plus human-readable review feedback to the PR.
 
-The system is designed for public repositories and therefore treats PR-controlled content as untrusted. It must never execute PR-controlled code in the privileged AI-review path, must isolate model-readable filesystem access to a constrained review root, and must keep Qwen, Linear, and GitHub write credentials separated by workflow phase.
+The system is designed for public repositories and therefore treats PR-controlled content as untrusted. It must never execute PR-controlled code in the privileged AI-review path, must isolate model-readable filesystem access to a constrained review root, and must keep Token Plan model, Linear, and GitHub write credentials separated by workflow phase.
 
-The V1 deployment intentionally has no VPS, webhook service, database, or custom GitHub App. It uses GitHub Actions, reusable workflows, native ephemeral `GITHUB_TOKEN`, repository secrets, Linear OAuth client credentials, Alibaba Cloud Model Studio PAYG access, Rejudge, and GitHub Actions artifacts.
+The V1 deployment intentionally has no VPS, webhook service, database, or custom GitHub App. It uses GitHub Actions, reusable workflows, native ephemeral `GITHUB_TOKEN`, repository secrets, Linear OAuth client credentials, Alibaba Cloud Model Studio Token Plan through the fixed Singapore international endpoint, Rejudge, and GitHub Actions artifacts.
 
 ## 2. Goals
 
@@ -27,7 +27,7 @@ The V1 goals are:
 - support later use as a required merge check without allowing stochastic "rerun until green" behavior;
 - prevent untrusted PR content from reading secrets, escaping the review filesystem, executing code, or controlling review behavior;
 - maintain per-head review history and previous-blocker closure without introducing persistent infrastructure;
-- collect enough quality, reliability, and cost telemetry to calibrate the system before it becomes a required check.
+- collect enough quality, provider-usage, quota-failure, and reliability telemetry to calibrate the system before it becomes a required check.
 
 ## 3. Non-goals
 
@@ -41,7 +41,7 @@ V1 does not:
 - recursively fetch Linear attachments, linked documents, projects, or sub-issues;
 - expose raw Linear content, CI logs, prompts, reviewer transcripts, or model chain-of-thought in GitHub output or persisted review artifacts;
 - provide an external database, analytics backend, queue, central daemon, or webhook receiver;
-- guarantee a strict dollar-per-PR spending cap through a metering proxy;
+- reconstruct or guarantee a strict per-review Token Plan Credit charge through a custom metering proxy;
 - support a degraded 2-of-3 reviewer quorum or hidden model fallback;
 - automatically resolve old GitHub review threads;
 - provide consumer repositories with arbitrary prompt, model, severity, threshold, retry, or security configuration.
@@ -59,7 +59,7 @@ Additional invariants:
 3. A privileged review never executes target repository code.
 4. Reviewer filesystem tools are read-only and root-bound; "read-only" without path confinement is not sufficient.
 5. Reviewers never receive GitHub write capability.
-6. The publisher never receives Qwen or Linear credentials or raw private review context.
+6. The publisher never receives Token Plan model or Linear credentials or raw private review context.
 7. A result is attached only to the exact reviewed PR head SHA.
 8. A stale result is never published as the current result of a newer head.
 9. A machine verdict is computed from validated structured data, never from free-form prose or a model-supplied verdict field.
@@ -67,6 +67,7 @@ Additional invariants:
 11. A completed `PASS` or `BLOCK` for the same review identity is reused, not rerolled.
 12. GitHub Actions artifacts are canonical machine state. GitHub checks and comments are presentation surfaces.
 13. Pi is an internal implementation dependency of the Rejudge integration only. It is not a product/service boundary and must not leak into consumer, orchestration, state, or publishing contracts.
+14. Alibaba Token Plan through Pi's international `qwen-token-plan` provider is the only V1 inference channel. Consumer repositories cannot select a provider, endpoint, billing channel, API-key variable, or fallback.
 
 ## 5. High-level architecture
 
@@ -124,7 +125,10 @@ Consumer repositories cannot configure or override:
 - previous-blocker resolution semantics;
 - secret boundaries;
 - CI-log sanitization;
-- core cost ceilings.
+- provider ID and fixed Token Plan endpoint;
+- Token Plan credential contract;
+- model/provider fallback behavior;
+- core quota and abuse ceilings.
 
 ### 6.2 Repository-specific declarative configuration
 
@@ -186,7 +190,7 @@ One active AI run is allowed per repository/PR through GitHub Actions concurrenc
 
 Automatic AI review is authorized only when the PR author has repository permission equivalent to `write`, `maintain`, or `admin`.
 
-This check occurs before Qwen or Linear credentials are used. Unauthorized external/fork PRs do not trigger model calls and do not consume AI budget.
+This check occurs before Token Plan model or Linear credentials are used. Unauthorized external/fork PRs do not trigger model calls and do not consume AI budget.
 
 A separate maintainer-controlled manual path is required for intentionally reviewing an external PR. `workflow_dispatch` may target an open PR only when the dispatching actor has at least write-level repository permission. In that manual path, the maintainer's explicit dispatch is the authorization decision; the external PR author is not required to have write permission. All remaining exact-head, config, metadata, sandbox, and secret-boundary checks are identical to the automatic path.
 
@@ -239,7 +243,7 @@ Linear text is requirements context, not control instructions. A Linear comment 
 
 ### 10.3 Linear privacy boundary
 
-Private Linear title/description/comments may be sent to Rejudge reviewers and therefore to the configured model provider because they are required for requirements-compliance review.
+Private Linear title/description/comments may be sent to Rejudge reviewers and therefore to Alibaba Model Studio Token Plan because they are required for requirements-compliance review. V1 deliberately accepts inference processing of model-visible review context through the Token Plan international endpoint in Singapore (`ap-southeast-1`). This includes selected private Linear requirements/comments, trusted base policy, public PR source/context, and selected CI evidence. The system does not claim provider training/retention guarantees beyond the applicable Token Plan terms.
 
 Raw Linear content must not be copied verbatim into public GitHub output or persisted in canonical review artifacts. Findings are sanitized and paraphrased to explain the implementation mismatch without exposing private task text.
 
@@ -309,7 +313,7 @@ The target's `.rejudge` configuration is ignored. Rejudge configuration is creat
 
 The Rejudge/Pi worker runs with a centrally created temporary review root as its `cwd`; the PR HEAD repository is materialized only under `target/**` as inert evidence. Pi's agent/config directory is a separate trusted runtime directory outside the review root. PR-controlled `.pi/**`, `.rejudge/**`, `AGENTS.md`, local extensions, package scripts, and other target files must never be auto-loaded as Pi/Rejudge control resources.
 
-The review root must contain only data intentionally made available to reviewers. It must not contain Qwen credentials, Linear client secrets/tokens, GitHub write tokens, raw workflow environment dumps, or unrelated runner files.
+The review root must contain only data intentionally made available to reviewers. It must not contain Token Plan model credentials, Linear client secrets/tokens, GitHub write tokens, raw workflow environment dumps, or unrelated runner files.
 
 ## 13. Root-bound reviewer tools
 
@@ -376,37 +380,64 @@ The central prompt asks reviewers to inspect exact `base..head` changes for:
 
 Style-only, speculative, and low-value nit findings are excluded.
 
-## 16. Rejudge deployment and model panel
+## 16. Rejudge deployment, Token Plan provider, and model panel
 
 Rejudge is an ephemeral dependency inside each GitHub Actions review run. It is not a daemon, VPS service, or webhook worker.
 
-The central repository pins the exact Rejudge npm version in `package.json` and lockfile and installs it from trusted central code using `npm ci`. It does not clone the Rejudge repository per PR.
+### 16.1 Version and package pinning
 
-The V1 implementation baseline is `rejudge@0.3.1` with `@earendil-works/pi-coding-agent@0.85.1` / `@earendil-works/pi-tui@0.85.1`. Production review execution uses Rejudge's shipped Pi extension programmatically rather than treating the bundled Rejudge CLI as an opaque sandbox, because V1 must apply and verify root-confinement to the external Pi reviewer-tool runtime. No separate Pi CLI installation, interactive login flow, daemon, or long-lived Pi process is part of the architecture.
+The central repository pins the exact Rejudge npm version in `package.json` and lockfile and installs it from trusted central code using `npm ci`. The deployment artifact is the exact packed npm package; the system does not clone Rejudge from GitHub or assume that GitHub tags, repository `main`, or package-catalog mirrors are synchronized with npm publication.
+
+The V1 target Rejudge baseline is `rejudge@0.4.1`. Before that version is accepted into an engine SHA, a compatibility probe must inspect the exact installed npm artifact and verify the shipped extension/runtime contract used by this system: programmatic extension loading, fresh/resume behavior, run IDs, reviewer tools, judge `ask_panel`, and absence of implicit unsafe/full-tool mode.
+
+Pi remains an exact pinned internal runtime dependency. `@earendil-works/pi-coding-agent@0.85.1` / `@earendil-works/pi-tui@0.85.1` are the preferred migration baseline because their Token Plan provider and confinement behavior have already been reviewed. They become the final V1 pin only if the `rejudge@0.4.1` compatibility suite passes. If `0.4.1` requires a newer Pi version, that exact version must pass the complete provider, Rejudge, reasoning/tool-replay, and filesystem-confinement suites before it can replace `0.85.1`. A newer Pi is never adopted merely because it exists.
+
+Production review execution uses Rejudge's shipped Pi extension programmatically rather than treating the bundled Rejudge CLI as an opaque sandbox, because V1 must apply and verify root-confinement to the Pi reviewer-tool runtime. No separate Pi CLI installation, interactive login flow, daemon, or long-lived Pi process is part of the architecture.
 
 Only `src/review-engine/**` and `src/sandbox/**` may import `@earendil-works/pi-*`. All other modules must depend on `ai-pr-review`-owned interfaces and data contracts. This keeps Pi replaceable if Rejudge changes runtime in a later version.
 
-V1 model panel:
+### 16.2 Token Plan provider contract
+
+V1 uses Alibaba Cloud Model Studio Token Plan exclusively through Pi's built-in international provider `qwen-token-plan`. The provider owns the OpenAI-compatible wire behavior, including Token Plan thinking/reasoning compatibility. The fixed V1 endpoint is:
+
+```text
+https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1
+```
+
+The only model-provider credential is `QWEN_TOKEN_PLAN_API_KEY`. It must be supplied as a GitHub Actions secret and must match the Token Plan key shape (`sk-sp-...`) before any provider request is allowed. Consumer repositories cannot provide an alternate endpoint, provider ID, billing channel, or model credential variable.
+
+`ai-pr-review` does not recreate Qwen Code's `modelProviders`, `generationConfig`, `extra_body`, `thinkingMandatory`, modality declarations, or provider-template metadata. Those are Qwen Code configuration concepts, not the Pi runtime contract. Pi's built-in Token Plan provider is responsible for `enable_thinking`, `reasoning_effort`, and reasoning replay semantics.
+
+The central Pi model configuration is intentionally minimal. It may:
+
+- merge the exact `deepseek-v4-pro-0813` model into the generic `qwen-token-plan` provider when the selected pinned Pi exposes that snapshot only through its Individual catalog; the merged model compatibility metadata must be verified against the selected Pi's native Token Plan metadata before use;
+- apply per-model `maxTokens` overrides for the V1 output ceilings.
+
+It must not redefine the Token Plan base URL, auth semantics, generic provider behavior, context-window metadata, modality metadata, or reasoning maps merely to mirror another client's configuration. Model capability metadata comes from the selected pinned Pi catalog unless a narrowly documented compatibility override is required and covered by tests.
+
+### 16.3 V1 model panel
 
 | Role | Model | Reasoning |
 | --- | --- | --- |
-| Reviewer 1 | `qwen3.8-flash` | `medium` |
-| Reviewer 2 | `deepseek-v4-pro-0813` | `high` |
-| Reviewer 3 | `glm-5.2` | `high` |
-| Judge | `qwen3.8-max-0902` | `high` |
+| Reviewer 1 | `qwen-token-plan/qwen3.8-flash` | `medium` |
+| Reviewer 2 | `qwen-token-plan/deepseek-v4-pro-0813` | `high` |
+| Reviewer 3 | `qwen-token-plan/glm-5.2` | `high` |
+| Judge | `qwen-token-plan/qwen3.8-max` | `xhigh` |
 
-The panel intentionally uses three reviewer model families for diversity. The model configuration is central and cannot be changed by consumer repositories.
+The panel intentionally uses three reviewer model families for diversity. The model configuration is central and cannot be changed by consumer repositories. `qwen3.8-max-0902` is not part of V1 because the selected Token Plan does not expose it; the stable provider-facing ID is `qwen3.8-max`.
 
-V1 uses Alibaba Cloud Model Studio PAYG access for predictable per-model metering and the approved model panel. This is an operational V1 choice, not an architectural claim that other Alibaba billing plans cannot support automation.
+Provider model IDs are service identifiers, not immutable artifacts. Even a date-like model name does not make the provider backend cryptographically reproducible. `engine_sha` pins `ai-pr-review` code/configuration but does not guarantee an unchanged provider-side model revision. Telemetry records the requested model ID and, when the provider exposes one safely, the provider-reported model ID/revision. Provider revision is not part of `ReviewIdentityV1`.
 
-Per-role output ceilings:
+For Qwen 3.8, V1 asks Pi for `medium` on Reviewer 1 and `xhigh` on the judge so the configured reasoning level matches Pi's supported Token Plan mapping directly rather than relying on clamping. DeepSeek/GLM reasoning behavior is taken from the selected pinned Pi Token Plan metadata. Real promotion testing must verify outbound thinking/reasoning behavior and multi-turn/tool replay for the exact pinned stack.
+
+Per-role output ceilings are central overrides:
 
 - each reviewer: 32k output-token ceiling;
 - judge: 24k output-token ceiling.
 
 The complete AI review job has a 20-minute timeout.
 
-V1 requires strict technical completion of all three reviewers and the judge. There is no 2-of-3 degraded success and no hidden model substitution.
+V1 requires strict technical completion of all three reviewers and the judge. There is no 2-of-3 degraded success and no hidden model substitution. Token Plan is the only inference channel: there is no fallback to PAYG, Coding Plan, another endpoint, another API key, another provider, or a substitute model.
 
 ## 17. Structured judge result
 
@@ -549,9 +580,14 @@ V1 is strict all-or-nothing for the model panel:
 - invalid structured result after the one repair -> `UNABLE_TO_REVIEW`;
 - unavailable Linear requirements -> `UNABLE_TO_REVIEW`;
 - invalid trusted config/policy -> `UNABLE_TO_REVIEW`;
-- unavailable exact-head CI status context -> `UNABLE_TO_REVIEW`.
+- unavailable exact-head CI status context -> `UNABLE_TO_REVIEW`;
+- invalid Token Plan provider configuration -> `UNABLE_TO_REVIEW` (`PROVIDER_CONFIG_INVALID`);
+- Token Plan authentication failure -> `UNABLE_TO_REVIEW` (`PROVIDER_AUTH_FAILED`);
+- Token Plan rate/concurrency throttling after bounded provider retry -> `UNABLE_TO_REVIEW` (`PROVIDER_RATE_LIMITED`);
+- Token Plan Credit/quota exhaustion -> `UNABLE_TO_REVIEW` (`PROVIDER_QUOTA_EXHAUSTED`);
+- Token Plan service/network unavailability after bounded provider retry -> `UNABLE_TO_REVIEW` (`PROVIDER_UNAVAILABLE`).
 
-No outer automatic retry reruns the entire Rejudge panel. Internal provider retries remain Rejudge/provider responsibility. Bounded inexpensive GitHub/Linear HTTP retries are permitted for transient transport failures.
+Provider availability failures are never converted into `PASS` or `BLOCK` and never trigger a billing/provider/model fallback. No outer automatic retry reruns the entire Rejudge panel. Internal provider retries remain Rejudge/provider responsibility. Bounded inexpensive GitHub/Linear HTTP retries are permitted for transient transport failures.
 
 A missing failed-job log is not fatal when the job status is known.
 
@@ -593,7 +629,7 @@ Canonical per-run state is a GitHub Actions artifact containing sanitized `Revie
 - wrapper-generated finding IDs;
 - model IDs;
 - previous review head SHA;
-- durations and safe usage/cost telemetry;
+- durations and safe token/provider-usage telemetry;
 - non-sensitive error codes for `UNABLE_TO_REVIEW`.
 
 It must not contain:
@@ -672,7 +708,7 @@ The system uses three logical security zones.
 
 ### 26.1 Primary CI zone
 
-Normal repository CI is triggered by `pull_request`, may execute PR-controlled code, and has no Qwen or Linear credentials and no GitHub write permission beyond what is already required by the repository's CI design.
+Normal repository CI is triggered by `pull_request`, may execute PR-controlled code, and has no Token Plan model or Linear credentials and no GitHub write permission beyond what is already required by the repository's CI design.
 
 ### 26.2 Review zone
 
@@ -681,10 +717,10 @@ The trusted `workflow_run` / reusable review path receives read-only GitHub acce
 The review/model job receives only the secrets it needs, explicitly scoped at the relevant step/job:
 
 - Linear credential-exchange/loading step: `LINEAR_CLIENT_ID`, `LINEAR_CLIENT_SECRET`;
-- Rejudge step: `QWEN_API_KEY`;
+- Rejudge step: `QWEN_TOKEN_PLAN_API_KEY`;
 - Rejudge process does not receive GitHub write credentials.
 
-The Rejudge child process is spawned with an explicit environment allowlist. It receives only the operating variables required to run the pinned runtime plus the provider credential/config required for the model call. It does not inherit Linear client credentials/tokens, `GITHUB_TOKEN`, or unrelated GitHub Actions environment values. Dedicated safe `HOME`/`XDG_CONFIG_HOME` locations may be created for trusted central configuration.
+The Rejudge child process is spawned with an explicit environment allowlist. It receives only the operating variables required to run the pinned runtime plus `QWEN_TOKEN_PLAN_API_KEY`. The central engine validates the Token Plan key prefix before the child is allowed to make a provider request. The child does not inherit Linear client credentials/tokens, `GITHUB_TOKEN`, `BAILIAN_TOKEN_PLAN_API_KEY`, legacy `QWEN_API_KEY`, or unrelated GitHub Actions environment values. Dedicated safe `HOME`/`XDG_CONFIG_HOME` locations may be created for trusted central configuration.
 
 Secrets are never passed with `secrets: inherit`; the caller names each allowed secret explicitly.
 
@@ -692,7 +728,7 @@ Secrets are never passed with `secrets: inherit`; the caller names each allowed 
 
 ### 26.3 Publisher zone
 
-A separate publisher job consumes only sanitized canonical review state and receives the minimal GitHub write permissions required for check/comment publication. It receives no Qwen or Linear credentials, raw Linear context, raw logs, or reviewer filesystem.
+A separate publisher job consumes only sanitized canonical review state and receives the minimal GitHub write permissions required for check/comment publication. It receives no Token Plan model or Linear credentials, raw Linear context, raw logs, or reviewer filesystem.
 
 This ensures no process simultaneously has untrusted model tool access and GitHub write authority.
 
@@ -700,9 +736,9 @@ The central reusable workflow cannot elevate permissions above those granted by 
 
 The central reusable workflow reference is pinned to a full commit SHA. Updating the central reviewer in a consumer repository is therefore an explicit PR/change rather than an implicit consequence of pushing to `ai-pr-review/main`.
 
-## 27. Cost and abuse controls
+## 27. Provider quota and abuse controls
 
-V1 cost controls are deterministic ceilings rather than a strict billing proxy.
+V1 controls request size, reruns, time, and model fan-out deterministically, but it does not attempt to reproduce Token Plan subscription accounting. Alibaba Token Plan Credits are authoritative at the provider/subscription layer and are not derived locally from token counts.
 
 Pre-model limits:
 
@@ -727,12 +763,9 @@ Model limits:
 - closure resume only when previous blockers exist;
 - maximum 20 published findings.
 
-The system records safe model usage/token counts and estimated cost when the provider exposes enough data. Initial operational alert thresholds are:
+The three reviewers remain parallel in V1. The system does not add a database, distributed semaphore, or cross-repository queue merely to coordinate Token Plan concurrency. If the actual subscription cannot sustain the required panel under Stage 1 load, the remedy is an explicit design change (for example a provider-capacity change or bounded reviewer scheduling) that preserves mandatory 3/3 completion; V1 does not silently degrade to a smaller quorum.
 
-- median review cost greater than USD 1; or
-- p95 review cost greater than USD 2.
-
-These are tuning alerts, not automatic correctness/rollout gates.
+Persistent telemetry records safe token counts, duration, requested/effective model reasoning, judge repairs, closure usage, and provider/quota failure categories. It does not present PAYG dollar estimates as Token Plan spend. If `estimated_cost_usd` remains in the V1 state schema for compatibility, Token Plan runs set it to `null`. V1 does not infer per-review Credits unless Alibaba exposes a trustworthy request-scoped Credit value in the runtime response; subscription-console/account usage remains authoritative otherwise.
 
 ## 28. Rollout stages
 
@@ -771,9 +804,11 @@ Reliability thresholds:
 - `UNABLE_TO_REVIEW` rate <= 5%;
 - p95 review latency <= 15 minutes after primary CI completion.
 
+Calibration also reports Token Plan provider failures (configuration/auth/rate-limit/quota/unavailable) as a breakdown of `UNABLE_TO_REVIEW`. V1 has no separate numeric provider-failure gate beyond the overall completion/UNABLE thresholds, but repeated quota or concurrency failures block a responsible Stage 2 decision until their operational cause is understood.
+
 Security thresholds are absolute:
 
-- zero known unauthorized Qwen invocations;
+- zero known unauthorized Token Plan model invocations;
 - zero secret leaks;
 - zero raw private Linear publications;
 - zero successful reviewer filesystem escapes;
@@ -814,7 +849,7 @@ Required deterministic scenarios include:
 - changed head before review or publication -> stale skip/no wrong-head side effect;
 - same-identity `PASS`/`BLOCK` -> artifact reuse with zero model rerun;
 - `UNABLE_TO_REVIEW` -> rerun allowed;
-- unauthorized automatic PR -> zero Qwen and zero Linear calls;
+- unauthorized automatic PR -> zero Token Plan model and zero Linear calls;
 - base-SHA config/policy selection despite malicious HEAD changes;
 - previous blocker resolved/still-present/invalidated/uncertain aggregation;
 - expired previous artifact -> fresh review still valid;
@@ -837,12 +872,26 @@ Every attempt must deterministically fail and the canary value must never appear
 
 ### 30.3 Promotion smoke for a new central SHA
 
-Before a new central engine SHA is pinned by consumer repositories, run real Rejudge/Qwen smoke tests against tiny fixtures:
+Before a new central engine SHA is pinned by consumer repositories, run the exact production stack against Alibaba Token Plan: pinned Rejudge npm artifact -> pinned hardened Pi runtime -> built-in international `qwen-token-plan` provider -> Singapore endpoint. A direct `curl`/single-model `200 OK` probe is useful diagnostics but is not a promotion test.
 
+The promotion suite must prove at least:
+
+- the exact `rejudge@0.4.1` npm artifact exposes the programmatic extension/runtime contracts required by the wrapper;
+- the selected exact Pi version passes root-confinement and Token Plan provider compatibility tests;
+- the provider identity/base URL/auth contract is exactly `qwen-token-plan`, the fixed Singapore endpoint, and `QWEN_TOKEN_PLAN_API_KEY`;
+- the configured models are available: `qwen3.8-flash`, merged/validated `deepseek-v4-pro-0813`, `glm-5.2`, and `qwen3.8-max`;
+- all three reviewers technically complete under real parallel execution;
+- reviewer `read`, `grep`, `find`, `ls`, and precomputed `git_diff` work while outside-root access remains denied;
+- Pi sends/handles Token Plan thinking and reasoning semantics for the configured `medium`, `high`, and `xhigh` levels, including multi-turn/tool reasoning replay;
+- the judge receives panel reports and `ask_panel` works;
+- strict `JudgeResultV1` output works;
+- one invalid-JSON same-run resume repair works and a second invalid result becomes `UNABLE_TO_REVIEW`;
+- previous-blocker closure through the current-run resume path works;
+- provider auth/rate-limit/quota/unavailable failures fail closed as `UNABLE_TO_REVIEW` with no fallback;
 - known-good change -> schema-valid `PASS`;
 - known-bad change -> schema-valid `BLOCK` with at least one valid blocking finding.
 
-The smoke verifies technical completion of all three reviewers and judge, structured-output compatibility, and sandbox integrity. It does not assert exact natural-language wording.
+The promotion test also records whether the configured 32k reviewer / 24k judge output ceilings are accepted by the exact stack and whether the full panel remains within the 20-minute job limit. It does not assert exact natural-language wording.
 
 ### 30.4 Real GitHub end-to-end fixture
 
@@ -853,7 +902,7 @@ Before initial Stage 1 production rollout and after major workflow/security chan
 - `workflow_run`;
 - central reusable workflow;
 - Linear loading;
-- real Qwen/Rejudge;
+- real Rejudge/Pi/Alibaba Token Plan execution;
 - artifact persistence;
 - exact-head Check Run;
 - stable summary;
@@ -863,7 +912,7 @@ Before initial Stage 1 production rollout and after major workflow/security chan
 - final `PASS`;
 - separate `UNABLE_TO_REVIEW` case.
 
-Stage 1 cannot begin until the adversarial filesystem suite and real GitHub E2E have passed.
+Stage 1 cannot begin until the adversarial filesystem suite, real Token Plan promotion smoke, and real GitHub E2E have passed.
 
 ## 31. Component boundaries
 
@@ -943,7 +992,7 @@ PR head
 -> automatic author authorization OR maintainer manual authorization
 -> base-SHA repo config validation
 -> PR metadata validation + deterministic Linear key
--> size/cost preflight
+-> size/quota-abuse preflight
 -> compute ReviewIdentityV1
 -> load existing canonical artifact for same identity
    -> if PASS/BLOCK: skip models and repair presentation
@@ -982,11 +1031,13 @@ Sanitized artifacts and workflow logs should expose enough deterministic telemet
 - repository/PR/review identity;
 - stage transitions and durations;
 - final outcome and machine-readable failure reason;
-- exact model IDs/reasoning levels;
+- requested model IDs and requested/effective reasoning levels;
+- provider-reported model ID/revision when safely available;
 - Rejudge run technical completion status;
 - whether judge repair occurred;
 - whether closure occurred;
-- safe token/usage/cost estimates when available;
+- safe token/usage counts and provider/quota failure category;
+- `estimated_cost_usd: null` for Token Plan unless the schema is later versioned to represent authoritative provider Credits;
 - CI status counts;
 - finding counts by severity;
 - previous-blocker resolution counts;
@@ -1000,7 +1051,7 @@ For initial rollout, each consumer repository must add:
 
 1. `.github/ai-review.yml` with strict V1 config and base-SHA policy references;
 2. `.github/workflows/ai-pr-review.yml` with the repository's primary CI `workflow_run` trigger, concurrency, minimal permissions, explicit secret forwarding, and central reusable workflow pinned by full SHA;
-3. repository secrets `QWEN_API_KEY`, `LINEAR_CLIENT_ID`, `LINEAR_CLIENT_SECRET`;
+3. repository secrets `QWEN_TOKEN_PLAN_API_KEY`, `LINEAR_CLIENT_ID`, `LINEAR_CLIENT_SECRET`;
 4. existing deterministic Linear PR-metadata validation;
 5. Stage 1 leaves `AI PR Review` non-required;
 6. Stage 2 later adds the exact check name to required checks after calibration.
@@ -1013,6 +1064,13 @@ The following decisions are final for V1 and are not implementation TODOs:
 
 - GitHub reusable workflow, not a GitHub App/webhook worker;
 - Rejudge ephemeral in GitHub Actions, not a daemon;
+- exact `rejudge@0.4.1` npm artifact is the V1 target baseline; Pi `0.85.1` is preferred but becomes final only after the `0.4.1` compatibility gate, otherwise a newer exact Pi pin must pass the full compatibility/confinement suite;
+- Alibaba Token Plan international/Singapore is the only V1 inference channel, through Pi's built-in `qwen-token-plan` provider;
+- provider endpoint/auth/billing channel are central and non-overridable; the secret is `QWEN_TOKEN_PLAN_API_KEY` with Token Plan key validation;
+- fixed panel is `qwen3.8-flash@medium`, `deepseek-v4-pro-0813@high`, `glm-5.2@high`, judge `qwen3.8-max@xhigh`;
+- `deepseek-v4-pro-0813` may be centrally merged into the generic Token Plan provider only with compatibility metadata validated against the selected pinned Pi runtime;
+- no Token Plan fallback to PAYG, Coding Plan, alternate endpoint/key/provider/model, or degraded reviewer quorum;
+- model-visible review context, including selected private Linear requirements, is intentionally processed through the Singapore Token Plan endpoint;
 - hybrid trusted-context model with base-SHA control policy;
 - Linear title/description normative, comments supplementary;
 - no Linear attachment/sub-issue recursive fetch;
