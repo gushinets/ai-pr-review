@@ -178,7 +178,7 @@ export async function assertPromotionRuntime(input: {
   );
   // Inspect installed metadata only; runtime Pi imports stay in the production boundary.
   // Check both the smoke and Rejudge resolutions so a nested incompatible Pi cannot pass.
-  let aiPackage = "";
+
   for (const name of [
     "@earendil-works/pi-coding-agent",
     "@earendil-works/pi-ai",
@@ -190,7 +190,7 @@ export async function assertPromotionRuntime(input: {
     const metadata = JSON.parse(await readFile(selected, "utf8"));
     assert.equal(metadata.name, name);
     assert.equal(metadata.version, "0.85.1");
-    if (name.endsWith("/pi-ai")) aiPackage = selected;
+
   }
   const config = JSON.parse(await readFile(join(input.runtimeDir, "pi-agent/models.json"), "utf8"));
   assert.deepEqual(Object.keys(config), ["providers"]);
@@ -207,25 +207,37 @@ export async function assertPromotionRuntime(input: {
   assert.equal(provider.models[0].maxTokens, 32768);
   assert.equal(provider.models[0].apiKey, undefined);
   assert.equal(provider.models[0].headers, undefined);
-  // This is the exact static catalog consumed by pinned Pi's native provider.
-  const catalog = JSON.parse(
-    await readFile(join(dirname(aiPackage), "dist/providers/data/qwen-token-plan.json"), "utf8"),
-  )["openai-completions"];
+  const pi = await import(import.meta.resolve("@earendil-works/pi-coding-agent"));
+  const credentials = {
+    read: () => {
+      throw new Error("UNEXPECTED_AUTH_READ");
+    },
+    list: () => {
+      throw new Error("UNEXPECTED_AUTH_LIST");
+    },
+    modify: () => {
+      throw new Error("UNEXPECTED_AUTH_WRITE");
+    },
+    delete: () => {
+      throw new Error("UNEXPECTED_AUTH_DELETE");
+    },
+  };
+  const runtime = await pi.ModelRuntime.create({
+    credentials,
+    modelsPath: join(input.runtimeDir, "pi-agent/models.json"),
+    allowModelNetwork: false,
+    refreshOnCreate: false,
+  });
+  assert.equal(runtime.getError(), undefined);
   for (const { model, level, maxTokens } of panel) {
     const id = model.split("/")[1]!;
-    const native = catalog[id];
-    assert.equal(native.provider, TOKEN_PLAN_PROVIDER_ID);
-    assert.equal(native.baseUrl, TOKEN_PLAN_BASE_URL);
-    const final =
-      id === "deepseek-v4-pro-0813"
-        ? provider.models[0]
-        : { ...native, ...provider.modelOverrides[id] };
-    assert.equal(final.api, "openai-completions");
-    assert.equal(final.reasoning, true);
-    assert.equal(final.thinkingLevelMap[level], level);
-    assert.equal(final.maxTokens, maxTokens);
-    assert.equal(final.baseUrl ?? TOKEN_PLAN_BASE_URL, TOKEN_PLAN_BASE_URL);
-    assert.equal(final.provider ?? TOKEN_PLAN_PROVIDER_ID, TOKEN_PLAN_PROVIDER_ID);
+    const actual = runtime.getModel(TOKEN_PLAN_PROVIDER_ID, id);
+    assert.ok(actual);
+    assert.equal(actual.provider, TOKEN_PLAN_PROVIDER_ID);
+    assert.equal(actual.baseUrl, TOKEN_PLAN_BASE_URL);
+    assert.equal(actual.reasoning, true);
+    assert.equal(actual.thinkingLevelMap?.[level], level);
+    assert.equal(actual.maxTokens, maxTokens);
   }
   await assertPiConfinementContract(input.reviewRoot);
 }
