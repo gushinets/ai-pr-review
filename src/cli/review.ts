@@ -87,8 +87,7 @@ export async function runCli(
       forbidden.some((key) => env[key] !== undefined) ||
       !env.GITHUB_TOKEN?.trim() ||
       (phase === "prepare" &&
-        (!env.LINEAR_CLIENT_ID?.trim() || !env.LINEAR_CLIENT_SECRET?.trim())) ||
-      (phase === "execute" && !env.QWEN_TOKEN_PLAN_API_KEY?.trim())
+        (!env.LINEAR_CLIENT_ID?.trim() || !env.LINEAR_CLIENT_SECRET?.trim()))
     )
       return 70;
     const workDir = values["work-dir"],

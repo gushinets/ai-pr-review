@@ -44,7 +44,7 @@ async function fixture() {
       record(url);
       const phase=process.argv[2];
       if(phase==='prepare' && (!process.env.LINEAR_CLIENT_SECRET || process.env.QWEN_TOKEN_PLAN_API_KEY || process.env.ALIBABA_WORKSPACE_ID)) throw Error('prepare-env');
-      if(phase==='execute' && (process.env.LINEAR_CLIENT_SECRET || process.env.LINEAR_CLIENT_ID || !process.env.QWEN_TOKEN_PLAN_API_KEY)) throw Error('execute-env');
+      if(phase==='execute' && (process.env.LINEAR_CLIENT_SECRET || process.env.LINEAR_CLIENT_ID)) throw Error('execute-env');
       if(phase==='emit-preflight-unable' && (process.env.LINEAR_CLIENT_SECRET || process.env.QWEN_TOKEN_PLAN_API_KEY)) throw Error('emit-env');
       const json=data=>new Response(JSON.stringify(data),{status:200,headers:{'content-type':'application/json'}});
       if(url.includes('/oauth/token')) return json({access_token:'oauth-canary',token_type:'Bearer',expires_in:3600,scope:'read'});
@@ -137,14 +137,19 @@ it.each(["QWEN_API_KEY", "BAILIAN_TOKEN_PLAN_API_KEY", "ALIBABA_WORKSPACE_ID"])(
   },
   20000,
 );
-it.each([undefined, "", " "])("requires a nonblank Token Plan key in execute: %j", async (key) => {
+it.each([undefined, "", " "])("persists missing or blank Token Plan config as canonical UNABLE: %j", async (key) => {
   const f = await fixture();
+  expect((await f.run("prepare", linear)).code).toBe(0);
   expect(await f.run("execute", { QWEN_TOKEN_PLAN_API_KEY: key })).toEqual({
-    code: 70,
+    code: 0,
     stdout: "",
     stderr: "",
   });
-  await expect(readFile(f.trace, "utf8")).rejects.toThrow();
+  expect(JSON.parse(await readFile(f.stateOut, "utf8"))).toMatchObject({
+    outcome: "UNABLE_TO_REVIEW",
+    unable_reason: "PROVIDER_CONFIG_INVALID",
+  });
+  expect(await readFile(f.trace, "utf8")).not.toContain("worker-safe");
 });
 it("runs production prepare and execute in separate OS processes, including isolated Rejudge child", async () => {
   const f = await fixture();
