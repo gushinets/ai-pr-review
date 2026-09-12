@@ -267,9 +267,13 @@ it("pins feedback to a canonical attempt and explains maintainer labels without 
   const first = state();
   const body = renderSummary(first);
   expect(body).toContain("write, maintain or admin");
+  expect(body).toContain("permission at evaluation time");
   expect(body).toContain("PR-level verdict");
   expect(body).toContain("finding valid");
   expect(body).toContain("false positive");
+  expect(body).toContain(
+    "An authorized user's exact marker is required; discussion prose alone does not count.",
+  );
   expect(body).toContain(
     `&lt;!-- ai-pr-review-material-miss:v1:${first.attempt_identity.head_sha} --&gt;`,
   );

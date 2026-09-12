@@ -13,23 +13,24 @@ export function renderCalibration({ report: r, coverage: c }: CalibrationResult)
   return [
     `# AI review calibration: ${r.repository}`,
     `Observation window (UTC): ${c.window_start} through ${c.window_end}.`,
-    "| Criterion | Current | Required | Result |",
-    "| --- | ---: | ---: | --- |",
-    ...calibrationCriteria(r).map(
-      (item) =>
-        `| ${item.name} | ${item.value ?? "unknown"} | ${item.threshold} | ${item.pass ? "PASS" : "FAIL"} |`,
-    ),
+    [
+      "| Criterion | Current | Required | Result |",
+      "| --- | ---: | ---: | --- |",
+      ...calibrationCriteria(r).map(
+        (item) =>
+          `| ${item.name} | ${item.value ?? "unknown"} | ${item.threshold} | ${item.pass ? "PASS" : "FAIL"} |`,
+      ),
+    ].join("\n"),
     `Stage 2 criteria met: ${r.stage2_criteria_met ? "yes (advisory)" : "no"}.`,
-    `p50 latency ms: ${r.p50_latency_ms ?? "unknown"}; median cost USD: ${r.median_cost_usd ?? "unknown"}; p95 cost USD: ${r.p95_cost_usd ?? "unknown"}.`,
-    ...(r.median_cost_usd !== null && r.median_cost_usd > 1
-      ? ["Warning: median cost exceeds $1.00 (soft alert)."]
-      : []),
-    ...(r.p95_cost_usd !== null && r.p95_cost_usd > 2
-      ? ["Warning: p95 cost exceeds $2.00 (soft alert)."]
-      : []),
+    `p50 latency ms: ${r.p50_latency_ms ?? "unknown"}.`,
+    `Input tokens: ${r.total_input_tokens}; output tokens: ${r.total_output_tokens}; token usage samples: ${r.token_usage_samples}/${c.canonical_attempts}. Totals include only reported fields; missing usage is unknown.`,
+    `Provider failures (canonical UNABLE outcomes): ${Object.entries(r.provider_failures)
+      .map(([reason, count]) => `${reason}: ${count}`)
+      .join("; ")}.`,
+    "Provider failures are diagnostic, not a separate Stage-2 criterion. Engineering owners should review repeated quota/concurrency failures.",
     `Observed trusted terminal attempts: ${c.trusted_terminal_attempts}; distinct canonical attempts: ${c.canonical_attempts}; reused artifacts: ${c.reused_artifacts}.`,
     `Missing attempted reviews: ${c.missing_attempts} (technical inability, not fabricated canonical UNABLE states); excluded stale/nonattempt runs: ${c.excluded_runs}; pending: ${c.pending_runs}.`,
-    `Latency observations: ${c.latency_observations}/${r.completed_live_reviews}; cost observations: ${c.cost_observations}/${c.canonical_attempts + c.missing_attempts}. Incomplete distributions remain unknown.`,
+    `Latency observations: ${c.latency_observations}/${r.completed_live_reviews}. Incomplete latency distributions remain unknown.`,
     "Quality denominators include only unambiguous authorized feedback. Unlabeled silence is excluded; a PASS dislike alone is not a material miss. See docs/calibration.md for denominator rules and coverage limits.",
     "Known security violations are operator-supplied; default 0 means no incidents supplied, not an audit or proof of absence.",
     "Engineering-owner approval is still required before changing required checks.",

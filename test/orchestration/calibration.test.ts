@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   buildCalibrationReport,
+  calibrationCriteria,
+  type CalibrationReportV1,
   type CalibrationSample,
 } from "../../src/orchestration/calibration.js";
 
@@ -10,12 +12,21 @@ const sample = (outcome: "PASS" | "BLOCK" | "UNABLE_TO_REVIEW" = "PASS"): Calibr
   blockingFindings: outcome === "BLOCK" ? [true] : [],
   materialMiss: false,
   latencyMs: 900000,
-  costUsd: null,
+  inputTokens: null,
+  outputTokens: null,
+  unableReason: null,
 });
 const ready = () => Array.from({ length: 25 }, (_, i) => sample(i < 10 ? "BLOCK" : "PASS"));
+const noProviderFailures = {
+  config_invalid: 0,
+  auth_failed: 0,
+  rate_limited: 0,
+  quota_exhausted: 0,
+  unavailable: 0,
+};
 
 describe("repository calibration metrics", () => {
-  it("meets the exact live, quality, reliability and latency boundaries with unknown cost", () => {
+  it("meets the exact Token Plan report contract with unknown usage", () => {
     expect(buildCalibrationReport("o/r", ready(), 0)).toEqual({
       schema_version: 1,
       repository: "o/r",
@@ -28,8 +39,16 @@ describe("repository calibration metrics", () => {
       material_miss_rate: 0,
       p50_latency_ms: 900000,
       p95_latency_ms: 900000,
-      median_cost_usd: null,
-      p95_cost_usd: null,
+      total_input_tokens: 0,
+      total_output_tokens: 0,
+      token_usage_samples: 0,
+      provider_failures: {
+        config_invalid: 0,
+        auth_failed: 0,
+        rate_limited: 0,
+        quota_exhausted: 0,
+        unavailable: 0,
+      },
       known_security_boundary_violations: 0,
       stage2_criteria_met: true,
     });
@@ -80,17 +99,88 @@ describe("repository calibration metrics", () => {
       buildCalibrationReport("o/r", [{ ...sample(), verdict: null }], 0).material_miss_rate,
     ).toBeNull();
   });
-  it("uses nearest-rank p95, conventional median and cost soft alerts never block", () => {
+  it("uses nearest-rank p95 and conventional median; security incidents block promotion", () => {
     const report = buildCalibrationReport(
       "o/r",
-      ready().map((s, i) => ({ ...s, costUsd: i + 1 })),
+      ready().map((s, i) => ({ ...s, latencyMs: i + 1 })),
       0,
     );
-    expect(report.median_cost_usd).toBe(13);
-    expect(report.p95_cost_usd).toBe(24);
+    expect(report.p50_latency_ms).toBe(13);
+    expect(report.p95_latency_ms).toBe(24);
     expect(report.stage2_criteria_met).toBe(true);
     expect(buildCalibrationReport("o/r", ready(), 1).stage2_criteria_met).toBe(false);
     expect(buildCalibrationReport("o/r", [], 0).completed_review_rate).toBe(0);
+  });
+  it("sums each non-null usage field, including zero and UNABLE usage, once per sample", () => {
+    const report = buildCalibrationReport(
+      "o/r",
+      [
+        { ...sample(), inputTokens: 100, outputTokens: 20 },
+        { ...sample(), inputTokens: 50 },
+        { ...sample("UNABLE_TO_REVIEW"), outputTokens: 7 },
+        { ...sample(), inputTokens: 0, outputTokens: 0 },
+        sample(),
+        { ...sample(), outcome: "STALE_SKIPPED", inputTokens: 999 },
+        { ...sample(), outcome: "NOT_ATTEMPTED", outputTokens: 999 },
+      ],
+      0,
+    );
+    expect(report).toMatchObject({
+      total_input_tokens: 150,
+      total_output_tokens: 27,
+      token_usage_samples: 4,
+    });
+  });
+  it("keeps repeated quota/concurrency failures visible without a hidden Stage-2 gate", () => {
+    const report = buildCalibrationReport(
+      "o/r",
+      [
+        ...Array.from({ length: 100 }, (_, i) => sample(i < 10 ? "BLOCK" : "PASS")),
+        ...[
+          "PROVIDER_QUOTA_EXHAUSTED",
+          "PROVIDER_QUOTA_EXHAUSTED",
+          "PROVIDER_RATE_LIMITED",
+          "PROVIDER_RATE_LIMITED",
+        ].map((unableReason) => ({
+          ...sample("UNABLE_TO_REVIEW"),
+          unableReason: unableReason as CalibrationSample["unableReason"],
+        })),
+      ],
+      0,
+    );
+    expect(report.provider_failures).toEqual({
+      ...noProviderFailures,
+      quota_exhausted: 2,
+      rate_limited: 2,
+    });
+    expect(report.stage2_criteria_met).toBe(true);
+  });
+  it.each([
+    ["completed_live_reviews", 25, 24],
+    ["evaluated_blocking_cases", 10, 9],
+    ["false_block_rate", 0.05, 0.050001],
+    ["blocking_finding_precision", 0.9, 0.899999],
+    ["material_miss_rate", 0.1, 0.100001],
+    ["completed_review_rate", 0.95, 0.949999],
+    ["unable_rate", 0.05, 0.050001],
+    ["p95_latency_ms", 900000, 900001],
+    ["known_security_boundary_violations", 0, 1],
+  ] as const)("enforces the inclusive %s boundary", (key, boundary, failing) => {
+    const report = buildCalibrationReport("o/r", ready(), 0);
+    expect(calibrationCriteria({ ...report, [key]: boundary }).every((c) => c.pass)).toBe(true);
+    expect(calibrationCriteria({ ...report, [key]: failing }).every((c) => c.pass)).toBe(false);
+  });
+  it.each([
+    "false_block_rate",
+    "blocking_finding_precision",
+    "material_miss_rate",
+    "p95_latency_ms",
+  ] as const)("does not promote an unknown %s", (key) => {
+    const report: CalibrationReportV1 = {
+      ...buildCalibrationReport("o/r", ready(), 0),
+      [key]: null,
+    };
+    expect(calibrationCriteria(report).every((c) => c.pass)).toBe(false);
   });
 });
 
@@ -206,6 +296,8 @@ interface FixtureOptions {
   createdAt?: string;
   incomplete?: boolean;
   inlineChanged?: boolean;
+  feedbackUserType?: string;
+  missCreatedAt?: string;
 }
 function github(options: FixtureOptions = {}) {
   const states = options.states ?? [canonical()];
@@ -242,7 +334,7 @@ function github(options: FixtureOptions = {}) {
   const reaction = (content: string) => ({
     id: content === "+1" ? 91 : 92,
     content,
-    user: human,
+    user: { ...human, type: options.feedbackUserType ?? "User" },
     created_at: options.oldReaction ? "2026-09-11T00:10:30Z" : "2026-09-11T00:12:00Z",
   });
   const octokit = new Octokit({
@@ -418,10 +510,10 @@ function github(options: FixtureOptions = {}) {
                   {
                     event: "commented",
                     id: 90,
-                    user: human,
+                    user: { ...human, type: options.feedbackUserType ?? "User" },
                     actor: human,
                     body: options.miss,
-                    created_at: "2026-09-11T00:13:00Z",
+                    created_at: options.missCreatedAt ?? "2026-09-11T00:13:00Z",
                     updated_at: "2026-09-11T00:13:00Z",
                   },
                 ]
@@ -435,6 +527,90 @@ function github(options: FixtureOptions = {}) {
 }
 
 describe("read-only GitHub calibration collection", () => {
+  it.each([
+    ["PROVIDER_CONFIG_INVALID", "config_invalid"],
+    ["PROVIDER_AUTH_FAILED", "auth_failed"],
+    ["PROVIDER_RATE_LIMITED", "rate_limited"],
+    ["PROVIDER_QUOTA_EXHAUSTED", "quota_exhausted"],
+    ["PROVIDER_UNAVAILABLE", "unavailable"],
+  ] as const)(
+    "counts canonical %s, including usage, without double-counting reused artifacts",
+    async (reason, key) => {
+      const state = canonical("UNABLE_TO_REVIEW");
+      state.unable_reason = reason;
+      state.review_identity = { ...state.attempt_identity, linear_issue: "ANY-17" };
+      state.lineage.linear_issue = "ANY-17";
+      state.telemetry.input_tokens = 123;
+      state.telemetry.output_tokens = 0;
+      const result = await collectCalibration(github({ states: [state, state] }).octokit, "o/r", 0);
+      expect(result.report).toMatchObject({
+        unable_rate: 1,
+        total_input_tokens: 123,
+        total_output_tokens: 0,
+        token_usage_samples: 1,
+        provider_failures: { ...noProviderFailures, [key]: 1 },
+      });
+      expect(result.coverage.reused_artifacts).toBe(1);
+    },
+  );
+  it("keeps non-provider UNABLE and missing attempts out of the provider breakdown", async () => {
+    for (const options of [{ states: [canonical("UNABLE_TO_REVIEW")] }, { missing: true }]) {
+      const { report } = await collectCalibration(github(options).octokit, "o/r", 0);
+      expect(report.unable_rate).toBe(1);
+      expect(report.provider_failures).toEqual(noProviderFailures);
+      expect(report.token_usage_samples).toBe(0);
+    }
+  });
+  it("reads partial canonical token telemetry and ignores legacy cost estimates", async () => {
+    const state = canonical();
+    state.telemetry.input_tokens = 17;
+    state.telemetry.estimated_cost_usd = 999;
+    const { report } = await collectCalibration(github({ states: [state] }).octokit, "o/r", 0);
+    expect(report).toMatchObject({
+      total_input_tokens: 17,
+      total_output_tokens: 0,
+      token_usage_samples: 1,
+    });
+    expect(report).not.toHaveProperty("median_cost_usd");
+    expect(report).not.toHaveProperty("p95_cost_usd");
+  });
+  it.each(["write", "maintain", "admin"])(
+    "counts %s thumbs-down as incorrect verdict and false positive",
+    async (permission) => {
+      const { report } = await collectCalibration(
+        github({ states: [canonical("BLOCK")], permission, reaction: "-1" }).octokit,
+        "o/r",
+        0,
+      );
+      expect(report).toMatchObject({
+        evaluated_blocking_cases: 1,
+        false_block_rate: 1,
+        blocking_finding_precision: 0,
+      });
+    },
+  );
+  it.each([
+    { permission: "read" },
+    { permission: "triage" },
+    { permission: "none" },
+    { feedbackUserType: "Bot" },
+  ])("excludes unauthorized verdict, inline and material-miss feedback %j", async (options) => {
+    const miss = `<!-- ai-pr-review-material-miss:v1:${sha} -->`;
+    const { report } = await collectCalibration(
+      github({ ...options, states: [canonical("BLOCK")], reaction: "-1" }).octokit,
+      "o/r",
+      0,
+    );
+    expect(report).toMatchObject({
+      evaluated_blocking_cases: 0,
+      false_block_rate: null,
+      blocking_finding_precision: null,
+    });
+    expect(
+      (await collectCalibration(github({ ...options, miss }).octokit, "o/r", 0)).report
+        .material_miss_rate,
+    ).toBeNull();
+  });
   it("reads trusted canonical artifacts, labels, timelines and primary-CI timing", async () => {
     const { octokit, paths } = github({ states: [canonical("BLOCK")] });
     const result = await collectCalibration(octokit, "o/r", 0);
@@ -488,15 +664,38 @@ describe("read-only GitHub calibration collection", () => {
       expect(result.report.material_miss_rate).toBe(1);
     },
   );
-  it.each(["human found blocker", `<!-- ai-pr-review-material-miss:v1:${"e".repeat(40)} -->`])(
-    "never interprets discussion as a miss",
-    async (miss) => {
-      expect(
-        (await collectCalibration(github({ miss, reaction: "-1" }).octokit, "o/r", 0)).report
-          .material_miss_rate,
-      ).toBe(0);
-    },
-  );
+  it.each([
+    "human found blocker",
+    `<!-- ai-pr-review-material-miss:v1:${"e".repeat(40)} -->`,
+    `<!-- ai-pr-review-material-miss:v2:${sha} -->`,
+    `<!--ai-pr-review-material-miss:v1:${sha}-->`,
+    `<!-- ai-pr-review-material-miss:v1:${sha}x -->`,
+    `&lt;!-- ai-pr-review-material-miss:v1:${sha} --&gt;`,
+  ])("never interprets discussion as a miss", async (miss) => {
+    expect(
+      (await collectCalibration(github({ miss, reaction: "-1" }).octokit, "o/r", 0)).report
+        .material_miss_rate,
+    ).toBe(0);
+  });
+  it("requires the exact marker after AI PASS, including when accompanied by prose", async () => {
+    const miss = `Found a material blocker.\n<!-- ai-pr-review-material-miss:v1:${sha} -->\nDetails follow.`;
+    expect(
+      (await collectCalibration(github({ miss }).octokit, "o/r", 0)).report.material_miss_rate,
+    ).toBe(1);
+    expect(
+      (
+        await collectCalibration(
+          github({ miss, missCreatedAt: "2026-09-11T00:10:00Z" }).octokit,
+          "o/r",
+          0,
+        )
+      ).report.material_miss_rate,
+    ).toBe(0);
+    expect(
+      (await collectCalibration(github({ miss, states: [canonical("BLOCK")] }).octokit, "o/r", 0))
+        .report.material_miss_rate,
+    ).toBeNull();
+  });
   it("counts missing failed attempts conservatively", async () => {
     const result = await collectCalibration(github({ missing: true }).octokit, "o/r", 0);
     expect(result.report.unable_rate).toBe(1);
@@ -546,30 +745,38 @@ import { join } from "node:path";
 import { vi } from "vitest";
 import { runCli, renderCalibration } from "../../src/cli/calibration-report.js";
 
-it("prints every criterion, cost soft alerts, observation coverage and mandatory owner approval", () => {
+it("prints every criterion, tokens, provider failures, coverage and mandatory owner approval", () => {
   const result = {
     report: buildCalibrationReport(
       "o/r",
-      ready().map((s) => ({ ...s, costUsd: 3 })),
+      [
+        ...ready().map((s) => ({ ...s, inputTokens: 3, outputTokens: 1 })),
+        { ...sample("UNABLE_TO_REVIEW"), unableReason: "PROVIDER_RATE_LIMITED" },
+      ],
       0,
     ),
     coverage: {
       window_start: "2026-06-13T01:00:00.000Z",
       window_end: "2026-09-11T01:00:00.000Z",
-      trusted_terminal_attempts: 25,
-      canonical_attempts: 25,
+      trusted_terminal_attempts: 26,
+      canonical_attempts: 26,
       reused_artifacts: 0,
       missing_attempts: 0,
       excluded_runs: 0,
       pending_runs: 0,
       latency_observations: 25,
-      cost_observations: 25,
     },
   };
   const text = renderCalibration(result);
+  expect(text).toContain(
+    "| Criterion | Current | Required | Result |\n| --- | ---: | ---: | --- |\n| Completed live reviews",
+  );
   expect(text.match(/\| PASS \|/g)).toHaveLength(9);
-  expect(text).toContain("median cost exceeds $1.00");
-  expect(text).toContain("p95 cost exceeds $2.00");
+  expect(text).toContain("Input tokens: 75; output tokens: 25; token usage samples: 25");
+  for (const key of ["config_invalid", "auth_failed", "quota_exhausted", "unavailable"])
+    expect(text).toContain(`${key}: 0`);
+  expect(text).toContain("rate_limited: 1");
+  expect(text).not.toMatch(/cost|USD|\$/i);
   expect(text).toContain("not an audit");
   expect(text).toContain("Missing attempted reviews: 0");
   expect(
@@ -596,7 +803,28 @@ it("CLI reads GitHub and emits only report fields in an optional JSON file", asy
     const saved = JSON.parse(await readFile(output, "utf8"));
     expect(saved.completed_live_reviews).toBe(1);
     expect(saved.known_security_boundary_violations).toBe(2);
-    expect(Object.keys(saved)).toHaveLength(15);
+    expect(Object.keys(saved).sort()).toEqual(
+      [
+        "schema_version",
+        "repository",
+        "completed_live_reviews",
+        "evaluated_blocking_cases",
+        "completed_review_rate",
+        "unable_rate",
+        "false_block_rate",
+        "blocking_finding_precision",
+        "material_miss_rate",
+        "p50_latency_ms",
+        "p95_latency_ms",
+        "total_input_tokens",
+        "total_output_tokens",
+        "token_usage_samples",
+        "provider_failures",
+        "known_security_boundary_violations",
+        "stage2_criteria_met",
+      ].sort(),
+    );
+    expect(saved.provider_failures).toEqual(noProviderFailures);
     expect(log.mock.calls.flat().join("\n")).toContain("Engineering-owner approval");
   } finally {
     log.mockRestore();

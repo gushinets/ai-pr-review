@@ -17,8 +17,16 @@ export interface CalibrationReportV1 {
   material_miss_rate: number | null;
   p50_latency_ms: number | null;
   p95_latency_ms: number | null;
-  median_cost_usd: number | null;
-  p95_cost_usd: number | null;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  token_usage_samples: number;
+  provider_failures: {
+    config_invalid: number;
+    auth_failed: number;
+    rate_limited: number;
+    quota_exhausted: number;
+    unavailable: number;
+  };
   known_security_boundary_violations: number;
   stage2_criteria_met: boolean;
 }
@@ -30,7 +38,9 @@ export interface CalibrationSample {
   blockingFindings: Array<boolean | null>;
   materialMiss: boolean;
   latencyMs: number | null;
-  costUsd: number | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  unableReason: ReviewStateV1["unable_reason"];
 }
 
 export function buildCalibrationReport(
@@ -58,7 +68,8 @@ export function buildCalibrationReport(
     ] as const;
   };
   const [p50_latency_ms, p95_latency_ms] = distribution(completed.map((s) => s.latencyMs));
-  const [median_cost_usd, p95_cost_usd] = distribution(attempted.map((s) => s.costUsd));
+  const providerFailures = (reason: CalibrationSample["unableReason"]) =>
+    attempted.filter((s) => s.outcome === "UNABLE_TO_REVIEW" && s.unableReason === reason).length;
   const report: CalibrationReportV1 = {
     schema_version: 1,
     repository,
@@ -71,8 +82,17 @@ export function buildCalibrationReport(
     material_miss_rate: ratio(passes.filter((s) => s.materialMiss).length, passes.length),
     p50_latency_ms,
     p95_latency_ms,
-    median_cost_usd,
-    p95_cost_usd,
+    total_input_tokens: attempted.reduce((total, s) => total + (s.inputTokens ?? 0), 0),
+    total_output_tokens: attempted.reduce((total, s) => total + (s.outputTokens ?? 0), 0),
+    token_usage_samples: attempted.filter((s) => s.inputTokens !== null || s.outputTokens !== null)
+      .length,
+    provider_failures: {
+      config_invalid: providerFailures("PROVIDER_CONFIG_INVALID"),
+      auth_failed: providerFailures("PROVIDER_AUTH_FAILED"),
+      rate_limited: providerFailures("PROVIDER_RATE_LIMITED"),
+      quota_exhausted: providerFailures("PROVIDER_QUOTA_EXHAUSTED"),
+      unavailable: providerFailures("PROVIDER_UNAVAILABLE"),
+    },
     known_security_boundary_violations: knownViolations,
     stage2_criteria_met: false,
   };
@@ -151,7 +171,6 @@ export interface CalibrationCoverage {
   excluded_runs: number;
   pending_runs: number;
   latency_observations: number;
-  cost_observations: number;
 }
 export interface CalibrationResult {
   report: CalibrationReportV1;
@@ -223,7 +242,6 @@ export async function collectCalibration(
     excluded_runs: 0,
     pending_runs: 0,
     latency_observations: 0,
-    cost_observations: 0,
   };
   const samples: CalibrationSample[] = [];
   const seen = new Map<
@@ -296,7 +314,9 @@ export async function collectCalibration(
       blockingFindings: [],
       materialMiss: false,
       latencyMs: null,
-      costUsd: state.telemetry.estimated_cost_usd,
+      inputTokens: state.telemetry.input_tokens,
+      outputTokens: state.telemetry.output_tokens,
+      unableReason: state.unable_reason,
     };
     if (state.outcome === "UNABLE_TO_REVIEW") return sample;
     const { data: pull } = await retryRead(() =>
@@ -591,7 +611,9 @@ export async function collectCalibration(
           blockingFindings: [],
           materialMiss: false,
           latencyMs: null,
-          costUsd: null,
+          inputTokens: null,
+          outputTokens: null,
+          unableReason: null,
         });
       }
     }
@@ -599,6 +621,5 @@ export async function collectCalibration(
   for (const { state, publication } of seen.values())
     samples.push(await observe(state, publication));
   coverage.latency_observations = samples.filter((s) => s.latencyMs !== null).length;
-  coverage.cost_observations = samples.filter((s) => s.costUsd !== null).length;
   return { report: buildCalibrationReport(repository, samples, knownViolations), coverage };
 }

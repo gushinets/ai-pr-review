@@ -119,8 +119,8 @@ export function renderSummary(state: ReviewStateV1): string {
       renderText(`Model ID: ${model.model_id}`, 450),
       renderText(`Effective reasoning: ${model.effective_reasoning ?? "unknown"}`, 450),
     ]),
-    "Stage 1 calibration: users with write, maintain or admin permission may react to this summary: 👍 correct / 👎 incorrect PR-level verdict. On blocking inline findings: 👍 finding valid / 👎 false positive. Feedback never changes the verdict. After a summary update, remove and re-add your reaction to label this reviewed head.",
-    "If a human finds a material blocker after AI PASS, post a PR comment with this exact marker:",
+    "Stage 1 calibration: only users with write, maintain or admin repository permission at evaluation time count as authorized feedback. React to this summary: 👍 correct / 👎 incorrect PR-level verdict. On blocking inline findings: 👍 finding valid / 👎 false positive. Feedback never changes the verdict. After a summary update, remove and re-add your reaction to label this reviewed head.",
+    "If a human finds a material blocker after AI PASS, post a PR comment with this exact marker. An authorized user's exact marker is required; discussion prose alone does not count.",
     renderText(`<!-- ai-pr-review-material-miss:v1:${state.attempt_identity.head_sha} -->`),
   ]
     .join("\n\n")
