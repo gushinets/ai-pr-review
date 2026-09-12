@@ -298,6 +298,27 @@ export async function collectCalibration(
     }
     return labels.size === 1 ? [...labels][0]! : null;
   };
+  const durableVerdict = async (
+    comments: Array<{
+      user: { login: string; type: string } | null;
+      body?: string | null;
+      created_at?: string | null;
+    }>,
+    head: string,
+    after: number,
+  ): Promise<boolean | null | undefined> => {
+    const labels = new Set<boolean>();
+    const correct = "<!-- ai-pr-review-verdict-feedback:v1:" + head + ":correct -->";
+    const incorrect = "<!-- ai-pr-review-verdict-feedback:v1:" + head + ":incorrect -->";
+    for (const comment of comments) {
+      if (timestamp(comment.created_at) <= after || !(await authorized(comment.user))) continue;
+      for (const line of (comment.body ?? "").split(/\r?\n/).map((value) => value.trim())) {
+        if (line === correct) labels.add(true);
+        if (line === incorrect) labels.add(false);
+      }
+    }
+    return labels.size === 0 ? undefined : labels.size === 1 ? [...labels][0]! : null;
+  };
   const observe = async (
     state: ReviewStateV1,
     publication: number | null,
@@ -335,7 +356,9 @@ export async function collectCalibration(
         ) &&
         pull.head.sha === head,
     );
-    if (matching.length === 1) {
+    const durable = await durableVerdict(summaries, head, finish);
+    if (durable !== undefined) sample.verdict = durable;
+    else if (matching.length === 1) {
       const summary = matching[0]!;
       sample.verdict = await reactions(
         summary.id,

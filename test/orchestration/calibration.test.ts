@@ -201,11 +201,11 @@ const sha = "b".repeat(40);
 const engine = "c".repeat(40);
 const bot = { id: 41898282, login: "github-actions[bot]", type: "Bot" };
 const human = { id: 12, login: "maintainer", type: "User" };
-function canonical(outcome: "PASS" | "BLOCK" | "UNABLE_TO_REVIEW" = "PASS"): ReviewStateV1 {
+function canonical(outcome: "PASS" | "BLOCK" | "UNABLE_TO_REVIEW" = "PASS", head = sha): ReviewStateV1 {
   const attempt = {
     repository: "o/r",
     pr_number: 17,
-    head_sha: sha,
+    head_sha: head,
     base_sha: "a".repeat(40),
     engine_sha: engine,
   };
@@ -232,7 +232,7 @@ function canonical(outcome: "PASS" | "BLOCK" | "UNABLE_TO_REVIEW" = "PASS"): Rev
     },
     outcome,
     unable_reason: outcome === "UNABLE_TO_REVIEW" ? "CONFIG_INVALID" : null,
-    ci_summary: { head_sha: sha, primary_ci_workflow: "CI", checks: [] },
+    ci_summary: { head_sha: head, primary_ci_workflow: "CI", checks: [] },
     judge_result:
       outcome === "UNABLE_TO_REVIEW"
         ? null
@@ -298,6 +298,8 @@ interface FixtureOptions {
   inlineChanged?: boolean;
   feedbackUserType?: string;
   missCreatedAt?: string;
+  feedback?: string[];
+  feedbackCreatedAt?: string;
 }
 function github(options: FixtureOptions = {}) {
   const states = options.states ?? [canonical()];
@@ -327,7 +329,7 @@ function github(options: FixtureOptions = {}) {
   const summary = {
     id: 70,
     user: options.forgedBot ? human : bot,
-    body: renderSummary(states[0]!),
+    body: renderSummary(states.find((state) => state.attempt_identity.head_sha === sha) ?? states[0]!),
     created_at: "2026-09-11T00:11:00Z",
     updated_at: "2026-09-11T00:11:00Z",
   };
@@ -351,7 +353,12 @@ function github(options: FixtureOptions = {}) {
             total_count: options.incomplete ? 101 : states.length,
             workflow_runs: states.map((_, i) => run(i + 1)),
           });
-        if (path.endsWith("/actions/runs") && url.searchParams.get("head_sha") === sha)
+        const requestedHead = url.searchParams.get("head_sha");
+        if (
+          path.endsWith("/actions/runs") &&
+          requestedHead !== null &&
+          states.some((state) => state.attempt_identity.head_sha === requestedHead)
+        )
           return response({
             total_count: options.ciMissing ? 0 : 1,
             workflow_runs: options.ciMissing
@@ -361,7 +368,7 @@ function github(options: FixtureOptions = {}) {
                     id: 99,
                     name: "CI",
                     event: "pull_request",
-                    head_sha: sha,
+                    head_sha: requestedHead,
                     status: "completed",
                     run_attempt: 1,
                     run_started_at: "2026-09-10T23:59:00Z",
@@ -482,7 +489,17 @@ function github(options: FixtureOptions = {}) {
               sha: options.oldHead || (options.changedHead && ++heads > 1) ? "e".repeat(40) : sha,
             },
           });
-        if (path.endsWith("/issues/17/comments")) return response([summary]);
+        if (path.endsWith("/issues/17/comments"))
+          return response([
+            summary,
+            ...(options.feedback ?? []).map((body, index) => ({
+              id: 100 + index,
+              user: { ...human, type: options.feedbackUserType ?? "User" },
+              body,
+              created_at: options.feedbackCreatedAt ?? "2026-09-11T00:12:00Z",
+              updated_at: options.feedbackCreatedAt ?? "2026-09-11T00:12:00Z",
+            })),
+          ]);
         if (path.endsWith("/issues/comments/70")) return response(summary);
         if (path.endsWith("/pulls/17/comments"))
           return response(
@@ -610,6 +627,41 @@ describe("read-only GitHub calibration collection", () => {
       (await collectCalibration(github({ ...options, miss }).octokit, "o/r", 0)).report
         .material_miss_rate,
     ).toBeNull();
+  });
+  it.each([
+    ["correct", "correct", 0],
+    ["incorrect", "incorrect", 1],
+    ["wrong head", "wrong", null],
+    ["old marker", "correct", null],
+    ["bot", "correct", null],
+    ["unauthorized", "correct", null],
+    ["contradictory", "contradictory", null],
+  ] as const)("uses durable historical BLOCK feedback for %s", async (label, kind, expected) => {
+    const historicalHead = "a".repeat(40);
+    const feedback =
+      kind === "wrong"
+        ? `<!-- ai-pr-review-verdict-feedback:v1:${"c".repeat(40)}:correct -->`
+        : kind === "contradictory"
+          ? [
+              `<!-- ai-pr-review-verdict-feedback:v1:${historicalHead}:correct -->`,
+              `<!-- ai-pr-review-verdict-feedback:v1:${historicalHead}:incorrect -->`,
+            ].join("\n")
+          : `<!-- ai-pr-review-verdict-feedback:v1:${historicalHead}:${kind} -->`;
+    const result = await collectCalibration(
+      github({
+        permission: label === "unauthorized" ? "read" : "write",
+        feedbackUserType: label === "bot" ? "Bot" : "User",
+        feedbackCreatedAt: label === "old marker" ? "2026-09-11T00:09:00Z" : undefined,
+        states: [canonical("BLOCK", historicalHead), canonical("PASS")],
+        feedback: [feedback],
+      }).octokit,
+      "o/r",
+      0,
+    );
+    expect(result.report).toMatchObject({
+      evaluated_blocking_cases: expected === null ? 0 : 1,
+      false_block_rate: expected,
+    });
   });
   it("reads trusted canonical artifacts, labels, timelines and primary-CI timing", async () => {
     const { octokit, paths } = github({ states: [canonical("BLOCK")] });

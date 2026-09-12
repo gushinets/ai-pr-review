@@ -167,6 +167,8 @@ describe("publication rendering", () => {
     ])
       expect(body).toContain(text);
     expect(body).not.toContain("Estimated cost USD: 0");
+    expect(body).toContain(`<!-- ai-pr-review-verdict-feedback:v1:${"b".repeat(40)}:correct -->`);
+    expect(body).toContain(`<!-- ai-pr-review-verdict-feedback:v1:${"b".repeat(40)}:incorrect -->`);
   });
   it.each(["unavailable", "incomplete"] as const)(
     "preserves the canonical %s-history annotation after privacy processing",
