@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   assertTokenPlanRuntimeContract,
+  getTokenPlanEffectiveReasoning,
   writeTokenPlanConfig,
   TOKEN_PLAN_PROVIDER_ID,
   TOKEN_PLAN_BASE_URL,
@@ -51,6 +52,18 @@ it("uses native Singapore routing, reasoning support and only the Token Plan cre
   expect(await resolve()).toBeUndefined();
   expect(await resolve("sk-sp-test")).toMatchObject({ auth: { apiKey: "sk-sp-test" } });
   expect(seen).toEqual(["QWEN_TOKEN_PLAN_API_KEY", "QWEN_TOKEN_PLAN_API_KEY"]);
+});
+it("resolves effective reasoning from the pinned Pi catalogs for every panel model", () => {
+  expect(
+    [
+      ["qwen3.8-flash", "medium", "medium"],
+      ["deepseek-v4-pro-0813", "high", "high"],
+      ["glm-5.2", "high", "high"],
+      ["qwen3.8-max", "xhigh", "xhigh"],
+    ].map(([model, requested]) =>
+      getTokenPlanEffectiveReasoning(model!, requested as "medium" | "high" | "xhigh"),
+    ),
+  ).toEqual(["medium", "high", "high", "xhigh"]);
 });
 it("writes only native token overrides and allowlisted Individual snapshot capabilities", async () => {
   const dir = await runtime();

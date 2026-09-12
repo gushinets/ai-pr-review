@@ -5,6 +5,7 @@ import { Type } from "typebox";
 import { CENTRAL_CONFIG } from "../config/central-config.js";
 import {
   assertTokenPlanRuntimeContract,
+  getTokenPlanEffectiveReasoning,
   writeTokenPlanConfig,
 } from "../review-engine/token-plan-config.js";
 import { buildWorkerEnv } from "../sandbox/worker-env.js";
@@ -565,7 +566,7 @@ export async function executeReview(
         role: (["reviewer_1", "reviewer_2", "reviewer_3", "judge"] as const)[i]!,
         model_id: model.model,
         requested_reasoning: model.level,
-        effective_reasoning: null,
+        effective_reasoning: getTokenPlanEffectiveReasoning(model.model, model.level),
         provider_reported_model_id: null,
       }),
     );

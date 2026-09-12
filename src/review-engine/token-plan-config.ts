@@ -41,14 +41,41 @@ function catalog() {
         ),
     ) ||
     !flash?.reasoning ||
-    !flash.thinkingLevelMap?.medium ||
+    flash.thinkingLevelMap?.medium !== "medium" ||
+
     !judge?.reasoning ||
-    !judge.thinkingLevelMap?.xhigh ||
+    judge.thinkingLevelMap?.xhigh !== "xhigh" ||
+
+    !models.some((m) => m.id === "glm-5.2" && m.reasoning && m.thinkingLevelMap?.high === "high") ||
     !source ||
-    source.api !== "openai-completions"
+    source.api !== "openai-completions" ||
+    source.baseUrl !== TOKEN_PLAN_BASE_URL ||
+    !source.reasoning ||
+    source.thinkingLevelMap?.high !== "high"
   )
     throw new Error("PROVIDER_CONFIG_INVALID");
   return source;
+}
+export function getTokenPlanEffectiveReasoning(
+  modelId: string,
+  requested: "medium" | "high" | "xhigh",
+): string {
+  catalog();
+  const id = modelId.split("/").pop();
+  const models = id === "deepseek-v4-pro-0813"
+    ? individual.qwenTokenPlanIndividualProvider().getModels()
+    : native.qwenTokenPlanProvider().getModels();
+  const model = models.find((candidate: CatalogModel) => candidate.id === id);
+  const effective = model?.thinkingLevelMap?.[requested];
+  if (
+    !model ||
+    model.api !== "openai-completions" ||
+    model.baseUrl !== TOKEN_PLAN_BASE_URL ||
+    !model.reasoning ||
+    typeof effective !== "string"
+  )
+    throw new Error("PROVIDER_CONFIG_INVALID");
+  return effective;
 }
 export function assertTokenPlanRuntimeContract(): void {
   catalog();
