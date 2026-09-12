@@ -42,10 +42,8 @@ function catalog() {
     ) ||
     !flash?.reasoning ||
     flash.thinkingLevelMap?.medium !== "medium" ||
-
     !judge?.reasoning ||
     judge.thinkingLevelMap?.xhigh !== "xhigh" ||
-
     !models.some((m) => m.id === "glm-5.2" && m.reasoning && m.thinkingLevelMap?.high === "high") ||
     !source ||
     source.api !== "openai-completions" ||
@@ -62,9 +60,10 @@ export function getTokenPlanEffectiveReasoning(
 ): string {
   catalog();
   const id = modelId.split("/").pop();
-  const models = id === "deepseek-v4-pro-0813"
-    ? individual.qwenTokenPlanIndividualProvider().getModels()
-    : native.qwenTokenPlanProvider().getModels();
+  const models =
+    id === "deepseek-v4-pro-0813"
+      ? individual.qwenTokenPlanIndividualProvider().getModels()
+      : native.qwenTokenPlanProvider().getModels();
   const model = models.find((candidate: CatalogModel) => candidate.id === id);
   const effective = model?.thinkingLevelMap?.[requested];
   if (

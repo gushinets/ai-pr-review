@@ -124,7 +124,7 @@ export function renderSummary(state: ReviewStateV1): string {
     ]),
     "Stage 1 calibration: only users with write, maintain or admin repository permission at evaluation time count as authorized feedback. React to this summary: 👍 correct / 👎 incorrect PR-level verdict. On blocking inline findings: 👍 finding valid / 👎 false positive. Feedback never changes the verdict. After a summary update, remove and re-add your reaction to label this reviewed head.",
     "If a human finds a material blocker after AI PASS, post a PR comment with this exact marker. An authorized user's exact marker is required; discussion prose alone does not count.",
-    `To persist exact-head verdict feedback, an authorized human with write, maintain or admin repository permission must post exactly one of these markers after this review: \u0060${verdictFeedbackMarker(state.attempt_identity.head_sha, "correct")}\u0060 or \u0060${verdictFeedbackMarker(state.attempt_identity.head_sha, "incorrect")}\u0060. Contradictory markers remain unlabeled; reactions are convenience only.`, 
+    `To persist exact-head verdict feedback, an authorized human with write, maintain or admin repository permission must post exactly one of these markers after this review: \u0060${verdictFeedbackMarker(state.attempt_identity.head_sha, "correct")}\u0060 or \u0060${verdictFeedbackMarker(state.attempt_identity.head_sha, "incorrect")}\u0060. Contradictory markers remain unlabeled; reactions are convenience only.`,
     renderText(`<!-- ai-pr-review-material-miss:v1:${state.attempt_identity.head_sha} -->`),
   ]
     .join("\n\n")

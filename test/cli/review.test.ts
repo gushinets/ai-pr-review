@@ -137,20 +137,23 @@ it.each(["QWEN_API_KEY", "BAILIAN_TOKEN_PLAN_API_KEY", "ALIBABA_WORKSPACE_ID"])(
   },
   20000,
 );
-it.each([undefined, "", " "])("persists missing or blank Token Plan config as canonical UNABLE: %j", async (key) => {
-  const f = await fixture();
-  expect((await f.run("prepare", linear)).code).toBe(0);
-  expect(await f.run("execute", { QWEN_TOKEN_PLAN_API_KEY: key })).toEqual({
-    code: 0,
-    stdout: "",
-    stderr: "",
-  });
-  expect(JSON.parse(await readFile(f.stateOut, "utf8"))).toMatchObject({
-    outcome: "UNABLE_TO_REVIEW",
-    unable_reason: "PROVIDER_CONFIG_INVALID",
-  });
-  expect(await readFile(f.trace, "utf8")).not.toContain("worker-safe");
-});
+it.each([undefined, "", " "])(
+  "persists missing or blank Token Plan config as canonical UNABLE: %j",
+  async (key) => {
+    const f = await fixture();
+    expect((await f.run("prepare", linear)).code).toBe(0);
+    expect(await f.run("execute", { QWEN_TOKEN_PLAN_API_KEY: key })).toEqual({
+      code: 0,
+      stdout: "",
+      stderr: "",
+    });
+    expect(JSON.parse(await readFile(f.stateOut, "utf8"))).toMatchObject({
+      outcome: "UNABLE_TO_REVIEW",
+      unable_reason: "PROVIDER_CONFIG_INVALID",
+    });
+    expect(await readFile(f.trace, "utf8")).not.toContain("worker-safe");
+  },
+);
 it("runs production prepare and execute in separate OS processes, including isolated Rejudge child", async () => {
   const f = await fixture();
   const prepared = await f.run("prepare", linear);

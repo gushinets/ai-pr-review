@@ -201,7 +201,10 @@ const sha = "b".repeat(40);
 const engine = "c".repeat(40);
 const bot = { id: 41898282, login: "github-actions[bot]", type: "Bot" };
 const human = { id: 12, login: "maintainer", type: "User" };
-function canonical(outcome: "PASS" | "BLOCK" | "UNABLE_TO_REVIEW" = "PASS", head = sha): ReviewStateV1 {
+function canonical(
+  outcome: "PASS" | "BLOCK" | "UNABLE_TO_REVIEW" = "PASS",
+  head = sha,
+): ReviewStateV1 {
   const attempt = {
     repository: "o/r",
     pr_number: 17,
@@ -329,7 +332,9 @@ function github(options: FixtureOptions = {}) {
   const summary = {
     id: 70,
     user: options.forgedBot ? human : bot,
-    body: renderSummary(states.find((state) => state.attempt_identity.head_sha === sha) ?? states[0]!),
+    body: renderSummary(
+      states.find((state) => state.attempt_identity.head_sha === sha) ?? states[0]!,
+    ),
     created_at: "2026-09-11T00:11:00Z",
     updated_at: "2026-09-11T00:11:00Z",
   };
@@ -651,7 +656,7 @@ describe("read-only GitHub calibration collection", () => {
       github({
         permission: label === "unauthorized" ? "read" : "write",
         feedbackUserType: label === "bot" ? "Bot" : "User",
-        feedbackCreatedAt: label === "old marker" ? "2026-09-11T00:09:00Z" : undefined,
+        ...(label === "old marker" ? { feedbackCreatedAt: "2026-09-11T00:09:00Z" } : {}),
         states: [canonical("BLOCK", historicalHead), canonical("PASS")],
         feedback: [feedback],
       }).octokit,
