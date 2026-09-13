@@ -28,6 +28,7 @@ import { createRejudgeEngine, type RejudgeEngine } from "../review-engine/rejudg
 import { parseResolutionResult } from "../review-engine/resolution-result.js";
 import {
   assertTokenPlanRuntimeContract,
+  getTokenPlanEffectiveReasoning,
   writeTokenPlanConfig,
   TOKEN_PLAN_API_KEY_ENV,
   TOKEN_PLAN_BASE_URL,
@@ -312,11 +313,12 @@ export function sanitizedEvidence(result: SmokeResult) {
     models: panel.map(({ model, level }) => ({
       model_id: model,
       requested_reasoning: level,
-      effective_reasoning: null,
+      effective_reasoning: getTokenPlanEffectiveReasoning(model, level),
     })),
     outcome: result.outcome,
     duration_ms: result.duration_ms,
-    // The production adapter does not return usage/effective reasoning. Never infer them.
+    // Usage and provider-reported model remain unknown unless the adapter returns them.
+    // Effective reasoning is safe to record because it is derived from validated pinned Pi metadata.
     input_tokens: null,
     output_tokens: null,
     provider_failure_category: result.provider_failure_category,

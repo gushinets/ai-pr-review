@@ -230,6 +230,28 @@ it.each([
     );
     expect(evidence.input_tokens).toBeNull();
     expect(evidence.output_tokens).toBeNull();
+    expect(evidence.models).toEqual([
+      {
+        model_id: "qwen-token-plan/qwen3.8-flash",
+        requested_reasoning: "medium",
+        effective_reasoning: "medium",
+      },
+      {
+        model_id: "qwen-token-plan/deepseek-v4-pro-0813",
+        requested_reasoning: "high",
+        effective_reasoning: "high",
+      },
+      {
+        model_id: "qwen-token-plan/glm-5.2",
+        requested_reasoning: "high",
+        effective_reasoning: "high",
+      },
+      {
+        model_id: "qwen-token-plan/qwen3.8-max",
+        requested_reasoning: "xhigh",
+        effective_reasoning: "xhigh",
+      },
+    ]);
   },
 );
 it.each([
@@ -531,6 +553,11 @@ it("keeps an unclassified worker failure inside the smoke output allowlist", asy
   }
 });
 
+it("derives promotion effective reasoning through the validated runtime helper", async () => {
+  const source = await readFile(cliPath, "utf8");
+  expect(source).toContain("getTokenPlanEffectiveReasoning(model, level)");
+  expect(source).not.toContain("effective_reasoning: null");
+});
 it("ships a manual-only least-privilege workflow with an isolated smoke secret", async () => {
   const path = ".github/workflows/promotion-smoke.yml";
   expect(existsSync(path), "Task 18 workflow must exist").toBe(true);
