@@ -1,0 +1,6 @@
+version: 1
+primary_ci_workflow: Fixture CI
+policy:
+  always:
+    - AGENTS.md
+  scoped: []
