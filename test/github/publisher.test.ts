@@ -61,7 +61,7 @@ it("paginates all check and comment surfaces and excludes forged ownership", asy
   ]);
   expect(reads).toHaveLength(6);
 });
-it("uses exact-head check payloads, issue comments and COMMENT-only reviews on real Octokit transport", async () => {
+it("uses exact-head check payloads, issue comments and COMMENT-only reviews with a body on real Octokit transport", async () => {
   const writes: Array<{ method: string; path: string; body: unknown }> = [];
   const publisher = createGitHubPublisher(
     new Octokit({
@@ -116,6 +116,7 @@ it("uses exact-head check payloads, issue comments and COMMENT-only reviews on r
       path: "/repos/o/r/pulls/17/reviews",
       body: {
         commit_id: head,
+        body: "AI PR Review inline findings.",
         event: "COMMENT",
         comments: [{ path: "src/a.ts", line: 7, side: "RIGHT", body: "finding" }],
       },

@@ -165,6 +165,7 @@ export function createGitHubPublisher(octokit: Octokit): GitHubPublisher {
         pull_number: prNumber,
         commit_id: headSha,
         event: "COMMENT",
+        body: "AI PR Review inline findings.",
         comments,
       });
     },
