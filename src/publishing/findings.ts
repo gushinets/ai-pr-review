@@ -13,6 +13,25 @@ const basisLabels: Record<FindingBasis, string> = {
   requirements: "Requirements",
   policy: "Policy",
 };
+const safeTextEscapes: Record<string, string> = {
+  "&": "&amp;",
+  "<": "&lt;",
+  ">": "&gt;",
+  "@": "&#64;",
+  "\\": "&#92;",
+  "`": "&#96;",
+  "*": "&#42;",
+  _: "&#95;",
+  "~": "&#126;",
+  "[": "&#91;",
+  "]": "&#93;",
+  "(": "&#40;",
+  ")": "&#41;",
+  "#": "&#35;",
+  "!": "&#33;",
+  ":": "&#58;",
+  "/": "&#47;",
+};
 
 export function buildReviewFindings(
   result: JudgeResultV1,
@@ -49,43 +68,13 @@ function normalizeForPresentation(text: string): string {
     .replace(/[\p{Cc}\p{Cf}]/gu, (char) => (char === "\n" || char === "\t" ? char : ""));
 }
 
-function escapeHtml(text: string): string {
-  return normalizeForPresentation(text)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/@/g, "&#64;");
-}
-
 // Encode Markdown punctuation as entities so model prose remains text even outside an HTML block.
 export function renderSafeText(text: string): string {
   return [...normalizeForPresentation(text)]
     .map((char) => {
-      if (char === "\n") return "<br>\n";
+      if (char === "\n") return "<br>";
       if (char === "\t") return "&#9;";
-      return (
-        (
-          {
-            "&": "&amp;",
-            "<": "&lt;",
-            ">": "&gt;",
-            "@": "&#64;",
-            "\\": "&#92;",
-            "`": "&#96;",
-            "*": "&#42;",
-            _: "&#95;",
-            "~": "&#126;",
-            "[": "&#91;",
-            "]": "&#93;",
-            "(": "&#40;",
-            ")": "&#41;",
-            "#": "&#35;",
-            "!": "&#33;",
-            ":": "&#58;",
-            "/": "&#47;",
-          } as Record<string, string>
-        )[char] ?? char
-      );
+      return safeTextEscapes[char] ?? char;
     })
     .join("");
 }
@@ -95,7 +84,7 @@ export function renderProse(text: string): string {
 }
 
 export function renderCode(text: string): string {
-  return `<code>${escapeHtml(text)}</code>`;
+  return `<code>${renderSafeText(text)}</code>`;
 }
 
 // Kept as a compatibility alias for callers that used the old helper; prose is no longer preformatted.
@@ -120,6 +109,7 @@ function fullFinding(finding: ReviewFindingV1): string {
     `<strong>${severityLabel(finding)}</strong> · <strong>${confidenceLabel(finding)}</strong>`,
     `Basis: ${basisLabel(finding)}`,
     "",
+    "<strong>Title</strong>",
     `<strong>${renderSafeText(finding.title)}</strong>`,
     "",
     "<strong>Evidence</strong>",

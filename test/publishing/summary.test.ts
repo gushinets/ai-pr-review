@@ -212,6 +212,21 @@ describe("publication rendering", () => {
     expect(body).not.toContain("```");
     expect(body.split("<!-- ai-pr-review-summary:v1 -->")).toHaveLength(2);
   });
+  it("keeps title newlines inside the heading and URL-like locations inert", () => {
+    const value = state();
+    value.findings = [
+      {
+        ...finding,
+        title: "Title\n- injected list item",
+        publication_location: { path: "https://evil.invalid/repo.ts", line: 7, side: "RIGHT" },
+      },
+    ];
+    const body = renderSummary(value);
+    expect(body).toContain("Title<br>- injected list item");
+    expect(body).not.toContain("Title<br>\n- injected list item");
+    expect(body).not.toContain("https://evil.invalid");
+    expect(body).toContain("https&#58;&#47;&#47;evil.invalid&#47;repo.ts&#58;7");
+  });
 });
 
 it("keeps a pathological UTF-8 report within the safe body budget with an explicit fallback", () => {
@@ -288,7 +303,7 @@ it("uses the V2 summary layout, collapses anchored details, and keeps unanchored
   expect(body).toContain("### Findings");
   expect(body).toContain("#### 🟡 1.");
   expect(body).toContain("<strong>Non-blocking</strong> · High confidence");
-  expect(body).toContain("<code>src/a.ts:7</code>");
+  expect(body).toContain("<code>src&#47;a.ts&#58;7</code>");
   expect(body).toContain("<details>\n<summary>Full finding</summary>");
   expect(body).toContain("<details open>\n<summary>Full finding</summary>");
   expect(body).toContain("#### 🟡 2.");
@@ -346,7 +361,7 @@ it("pins feedback to a canonical attempt and explains maintainer labels without 
     "An authorized user's exact marker is required; discussion prose alone does not count.",
   );
   expect(body).toContain(
-    `&lt;!-- ai-pr-review-material-miss:v1:${first.attempt_identity.head_sha} --&gt;`,
+    `&lt;&#33;-- ai-pr-review-material-miss&#58;v1&#58;${first.attempt_identity.head_sha} --&gt;`,
   );
   const marker = body.match(/<!-- ai-pr-review-calibration:v1:[a-f0-9]{64} -->/);
   expect(marker).not.toBeNull();
