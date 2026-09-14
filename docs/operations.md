@@ -2,6 +2,23 @@
 
 The reusable workflow runs trusted central code on Ubuntu 24.04 with Node 22.19.0. Every job checks out the called workflow repository at `job.workflow_sha` and verifies that exact engine identity. Consumer PR code is inert review evidence; its scripts, dependencies and local actions are never executed.
 
+## Stage 1 production acceptance record
+
+The current Stage 1 evidence record is `docs/stage1-acceptance.md`.
+
+- Central acceptance source SHA: `67096624a0513d7316e9babf41529c8ab94565f8`.
+- Frozen promoted engine SHA: `660525298b8785158fc8339add65f0e5cd87e749`.
+- Accepted Stage 1 consumers: `gushinets/anytoolai-platform` and `gushinets/payments-portal`.
+- Primary CI names: `baseline-backend` for Platform and `CI` for Payments.
+- Consumer callers remain pinned to the frozen engine by full SHA. A Task22 documentation commit is not a new engine SHA.
+- Stage 1 is informational: keep `AI PR Review` out of required merge checks.
+- `UNABLE_TO_REVIEW` is a fail-closed technical result. Fix the unavailable dependency, rerun the same review identity, and do not treat it as a code-only approval.
+- Calibration reports are repository-level Stage 1 signals. They do not mutate rulesets and they do not authorize Stage 2 on their own.
+- Token Plan Credits are authoritative only from Alibaba subscription usage or operator evidence. Do not infer Credits, PAYG dollars, or per-review spend from token counts.
+- Before any consumer adopts a different engine SHA, repeat the real promotion and GitHub E2E gates for that exact engine.
+
+For the Task22 record, Token Plan subscription usage was checked externally in Alibaba Model Studio Token Plan -> My Subscriptions on 2026-09-14. The active subscription and Credits consumption were visible. No Credits or monetary spend were inferred from local token telemetry.
+
 ## Consumer setup
 
 - Pin `gushinets/ai-pr-review/.github/workflows/reusable-ai-pr-review.yml` to a full commit SHA. Updating that pin is an explicit reviewed change.

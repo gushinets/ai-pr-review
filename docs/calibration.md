@@ -33,6 +33,18 @@ The JSON report includes this exact shape:
 - `known_security_boundary_violations`
 - `stage2_criteria_met`
 
+## Stage 1 baseline
+
+The Stage 1 baseline snapshot is recorded in `docs/stage1-acceptance.md`. Calibration is evaluated per repository; Platform and Payments do not share denominators or approval state.
+
+Early Stage 1 sample sizes are expected to sit below Stage 2 thresholds. `stage2_criteria_met=false` is normal until enough retained canonical artifacts and authorized feedback exist.
+
+Null quality or latency metrics mean insufficient labeled evidence, not zero defects and not zero latency. Token totals include only reported telemetry fields; zero totals with `token_usage_samples=0` mean usage was not reported in retained canonical state.
+
+Provider failure categories remain diagnostic breakdowns of canonical `UNABLE_TO_REVIEW` outcomes. Token Plan Credits remain externally authoritative in Alibaba subscription usage or operator evidence; calibration must not infer Credits or spend.
+
+No automatic ruleset mutation exists. Future Stage 2 requires the criteria below to pass for the repository and still needs explicit engineering-owner approval.
+
 ## Calibration definitions
 
 - `completed_live_reviews` counts terminal attempts that produced valid PASS/BLOCK state.
