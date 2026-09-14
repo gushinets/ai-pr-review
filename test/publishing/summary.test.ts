@@ -51,6 +51,16 @@ function state(): ReviewStateV1 {
     },
   };
 }
+
+type PersistedCheck = NonNullable<ReviewStateV1["ci_summary"]>["checks"][number];
+
+function check(
+  status: PersistedCheck["status"],
+  conclusion: PersistedCheck["conclusion"],
+): PersistedCheck {
+  return { kind: "check_run", name: "CI", status, conclusion };
+}
+
 const finding: ReviewFindingV1 = {
   finding_id: "finding-a",
   source_index: 0,
@@ -66,6 +76,31 @@ const finding: ReviewFindingV1 = {
 };
 
 describe("publication rendering", () => {
+  it.each([
+    ["empty checks", [], "CI: ⚠️ no checks"],
+    ["one success", [check("completed", "success")], "CI: ✅ 1/1 successful"],
+    [
+      "success plus neutral",
+      [check("completed", "success"), check("completed", "neutral")],
+      "CI: 1/2 successful · 0 failed · 0 pending · 1 other",
+    ],
+    [
+      "skipped",
+      [check("completed", "skipped")],
+      "CI: 0/1 successful · 0 failed · 0 pending · 1 other",
+    ],
+    [
+      "failure",
+      [check("completed", "failure")],
+      "CI: 0/1 successful · 1 failed · 0 pending · 0 other",
+    ],
+    ["pending", [check("pending", null)], "CI: 0/1 successful · 0 failed · 1 pending · 0 other"],
+  ] as const)("renders %s CI counts without a false green success", (_case, checks, expected) => {
+    const value = state();
+    value.ci_summary!.checks = [...checks];
+    expect(renderSummary(value)).toContain(expected);
+  });
+
   it.each([
     ["PASS", "success"],
     ["BLOCK", "failure"],

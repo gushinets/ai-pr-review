@@ -111,8 +111,10 @@ function visibleCiCounts(state: ReviewStateV1): string {
       ),
   ).length;
   const pending = checks.filter((check) => check.status !== "completed").length;
-  if (failure === 0 && pending === 0) return `CI: ✅ ${success}/${checks.length} successful`;
-  return `CI: ${success}/${checks.length} successful · ${failure} failed · ${pending} pending`;
+  if (checks.length === 0) return "CI: ⚠️ no checks";
+  if (success === checks.length) return `CI: ✅ ${success}/${checks.length} successful`;
+  const other = checks.length - success - failure - pending;
+  return `CI: ${success}/${checks.length} successful · ${failure} failed · ${pending} pending · ${other} other`;
 }
 
 function outcomeHeading(state: ReviewStateV1): string {
