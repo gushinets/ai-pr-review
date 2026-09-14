@@ -86,7 +86,7 @@ jobs:
     needs: preflight
     if: needs.preflight.outputs.status == 'READY' || needs.preflight.outputs.status == 'UNABLE_TO_REVIEW'
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 40
     permissions:
       actions: read
       contents: read

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { CENTRAL_CONFIG } from "../../src/config/central-config.js";
 
 type Step = {
   id?: string;
@@ -155,7 +156,7 @@ describe("central reusable workflow security contract", () => {
     });
     for (const job of [preflight!, publisher!])
       expect(JSON.stringify(job)).not.toMatch(/QWEN|LINEAR|ALIBABA/);
-    expect(review!["timeout-minutes"]).toBe(20);
+    expect(review!["timeout-minutes"]).toBe(40);
     expect(review!.needs).toBe("preflight");
     expect(review!.if).toBe(
       "needs.preflight.outputs.status == 'READY' || needs.preflight.outputs.status == 'UNABLE_TO_REVIEW'",
@@ -190,6 +191,17 @@ describe("central reusable workflow security contract", () => {
     for (const phase of [unable, prepare, execute])
       expect(phase.env!.ENGINE_SHA).toBe("${{ job.workflow_sha }}");
     expect(step(publisher!, "publish").env).toEqual({ GITHUB_TOKEN: "${{ github.token }}" });
+  });
+
+  it("keeps the GitHub review timeout above the engine deadline", () => {
+    const githubReviewTimeoutMinutes = workflow().jobs.review!["timeout-minutes"]!;
+
+    expect(CENTRAL_CONFIG.reviewTimeoutMs).toBe(35 * 60 * 1000);
+    expect(githubReviewTimeoutMinutes).toBe(40);
+    expect(githubReviewTimeoutMinutes * 60_000).toBeGreaterThan(CENTRAL_CONFIG.reviewTimeoutMs);
+    expect(
+      githubReviewTimeoutMinutes * 60_000 - CENTRAL_CONFIG.reviewTimeoutMs,
+    ).toBeGreaterThanOrEqual(5 * 60_000);
   });
   it("passes sanitized preflight outputs only and rejects mixed input modes", () => {
     const job = workflow().jobs.preflight!;

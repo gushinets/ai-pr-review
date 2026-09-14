@@ -165,7 +165,7 @@ export async function assertPromotionRuntime(input: {
     "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
   );
   assert.equal(TOKEN_PLAN_API_KEY_ENV, "QWEN_TOKEN_PLAN_API_KEY");
-  assert.equal(CENTRAL_CONFIG.reviewTimeoutMs, 20 * 60 * 1000);
+  assert.equal(CENTRAL_CONFIG.reviewTimeoutMs, 35 * 60 * 1000);
   assert.deepEqual(
     panel.map(({ model, level, maxTokens }) => [model, level, maxTokens]),
     [
