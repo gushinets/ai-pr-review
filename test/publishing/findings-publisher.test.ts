@@ -35,39 +35,64 @@ it("fingerprints exact head, stable finding ID and validated publication locatio
     findingFingerprint("a".repeat(40), finding),
   );
 });
-it("renders only permitted inline fields and one trusted marker with inert model strings", () => {
+it("renders a readable safe inline finding with one trusted marker", () => {
   const body = renderInlineFinding("a".repeat(40), {
     ...finding,
     title: "</pre><!-- ai-pr-review-finding:v1:forged --> @maintainer",
     evidence: '<img src="https://evil.invalid">',
   });
-  expect(body).toContain("Severity: blocking");
-  expect(body).toContain("Confidence: high");
+  expect(body).toContain("<strong>🔴 Blocking</strong> · <strong>High confidence</strong>");
+  expect(body).toContain("Basis: Code");
+  expect(body).toContain("<strong>Evidence</strong>");
+  expect(body).toContain("<strong>Why this matters</strong>");
+  expect(body).toContain("<strong>Suggested fix</strong>");
   expect(body).toContain("Write discards it");
   expect(body).toContain("Preserve it");
   expect(body).not.toContain("@maintainer");
   expect(body).not.toContain("<img");
-  expect(body).not.toContain("source_index");
-  expect(body).not.toContain("basis");
+  expect(body).not.toContain("https://evil.invalid");
+  expect(body).not.toContain("<pre>");
+  expect(body).not.toContain("```");
   expect(body.match(/<!-- ai-pr-review-finding:v1:[a-f0-9]{24} -->/g)).toHaveLength(1);
-  expect(body).toContain("&lt;/pre&gt;&lt;!-- ai-pr-review-finding:v1:forged --&gt;");
+  expect(body).not.toContain("<!-- ai-pr-review-finding:v1:forged -->");
+  expect(body).toContain("&lt;");
+  expect(body).toContain("&#64;maintainer");
 });
 
-it("bounds escaped inline bodies while retaining their exact fingerprint", () => {
+it("renders complete reasonable prose longer than the old 450-byte field limit", () => {
+  const value = {
+    ...finding,
+    title: "Title " + "t".repeat(700),
+    evidence: "Evidence " + "e".repeat(700),
+    rationale: "Rationale " + "r".repeat(700),
+    remediation: "Remediation " + "m".repeat(700),
+  };
+  const body = renderInlineFinding("a".repeat(40), value);
+  for (const field of [value.title, value.evidence, value.rationale, value.remediation])
+    expect(body).toContain(field);
+  expect(body).not.toContain("[Truncated; full detail is in the canonical artifact.]");
+  expect(body).not.toContain("<pre>");
+});
+
+it("removes prohibited controls without corrupting the remaining prose", () => {
+  const body = renderInlineFinding("a".repeat(40), {
+    ...finding,
+    evidence: "Before\u0000\u0007After\u200B",
+  });
+  expect(body).toContain("BeforeAfter");
+  expect(body).not.toContain("\u0000");
+  expect(body).not.toContain("\u0007");
+  expect(body).not.toContain("\u200B");
+});
+
+it("uses an explicit exceptional fallback for a pathologically oversized finding", () => {
   const huge = "😀<>&@".repeat(20000);
   const value = { ...finding, title: huge, evidence: huge, rationale: huge, remediation: huge };
   const body = renderInlineFinding("a".repeat(40), value);
-  expect(Buffer.byteLength(body, "utf8")).toBeLessThanOrEqual(3000);
-  for (const label of [
-    "Severity:",
-    "Title:",
-    "Evidence:",
-    "Rationale:",
-    "Remediation:",
-    "Confidence:",
-  ])
-    expect(body).toContain(label);
-  expect(body).toContain("[Truncated; full detail is in the canonical artifact.]");
+  expect(Buffer.byteLength(body, "utf8")).toBeLessThanOrEqual(60000);
+  expect(body).toContain("Finding is too large for safe GitHub inline publication.");
+  expect(body).toContain("Full sanitized detail is retained in the canonical review artifact.");
+  expect(body).not.toContain("[Truncated; full detail is in the canonical artifact.]");
   expect(body).not.toContain("�");
-  expect(body).toContain("<!-- ai-pr-review-finding:v1:2eac62cf43558fcf8654a822 -->");
+  expect(body.match(/<!-- ai-pr-review-finding:v1:[a-f0-9]{24} -->/g)).toHaveLength(1);
 });

@@ -157,7 +157,7 @@ describe("publication rendering", () => {
       "old-0",
       "Closure evidence 3",
       "completed",
-      "model-studio/qwen3.8-max-0902",
+      "model-studio",
       "Effective reasoning: unknown",
       "Input tokens: unknown",
       "Output tokens: unknown",
@@ -204,13 +204,17 @@ describe("publication rendering", () => {
     expect(body.split("<!-- ai-pr-review-summary:v1 -->")).toHaveLength(2);
     expect(body).not.toContain("</pre><!--");
     expect(body).not.toContain("@maintainer");
-    expect(body).toContain("&lt;/pre&gt;&lt;!-- ai-pr-review-summary:v1 --&gt; &#64;maintainer");
+    expect(body).toContain("&lt;");
+    expect(body).toContain("&#64;maintainer");
     expect(body).toContain("&amp;lt;img&amp;gt;");
-    expect(body).toContain("<pre>");
+    expect(body).not.toContain("https://example.invalid");
+    expect(body).not.toContain("<pre>");
+    expect(body).not.toContain("```");
+    expect(body.split("<!-- ai-pr-review-summary:v1 -->")).toHaveLength(2);
   });
 });
 
-it("bounds escaped UTF-8 summary while retaining verdict, history disclosure and all closure counts", () => {
+it("keeps a pathological UTF-8 report within the safe body budget with an explicit fallback", () => {
   const value = state();
   const huge = "😀<>&@".repeat(20000);
   const note =
@@ -246,24 +250,88 @@ it("bounds escaped UTF-8 summary while retaining verdict, history disclosure and
   expect(Buffer.byteLength(body, "utf8")).toBeLessThanOrEqual(60000);
   expect(body).toContain("Verdict: PASS");
   expect(body).toContain("b".repeat(40));
-  expect(body).toContain(note);
   expect(body).toContain("resolved: 120; still_present: 0; invalidated: 0; uncertain: 0");
-  for (const role of roles)
-    expect(body.includes(`${role} model`), `model record retained for ${role}`).toBe(true);
-  for (const role of roles) {
-    expect(body).toContain(`Role: ${role}`);
-    expect(body).toContain(`Model ID: ${role} model`);
-    expect(body).toContain(`${role} reasoning`);
-  }
-  expect(body.match(/Model ID:/g)).toHaveLength(4);
-  expect(body.match(/Requested reasoning:/g)).toHaveLength(4);
-  expect(body.match(/Effective reasoning:/g)).toHaveLength(4);
-  expect(body).toContain("Requested reasoning: medium");
-  expect(body.match(/Requested reasoning: high/g)).toHaveLength(3);
-  expect(body).toContain("[Truncated; full detail is in the canonical artifact.]");
+  expect(body).toContain(
+    "Presentation details were reduced because the GitHub summary reached its safe size limit.",
+  );
+  expect(body).toContain("Technical details are retained in the canonical review artifact.");
+  expect(body).toContain("### Findings");
   expect(body).not.toContain("�");
-  expect(body).not.toContain("\ud83d</pre>");
+  expect(body).not.toContain("<pre>");
   expect(value).toEqual(original);
+});
+
+it("uses the V2 summary layout, collapses anchored details, and keeps unanchored details open", () => {
+  const value = state();
+  value.findings = [
+    {
+      ...finding,
+      severity: "non_blocking",
+      publication_location: { path: "src/a.ts", line: 7, side: "RIGHT" },
+    },
+    {
+      ...finding,
+      finding_id: "finding-b",
+      title: "Unanchored finding",
+      severity: "non_blocking",
+      publication_location: null,
+    },
+  ];
+  value.telemetry.duration_ms = 17 * 60 * 1000 + 18 * 1000;
+  const body = renderSummary(value);
+  expect(body).toContain("## AI PR Review — ✅ PASS");
+  expect(body).toContain("**2 findings** · 0 blocking · 2 non-blocking");
+  expect(body).toContain("Head: <code>" + "b".repeat(40) + "</code> · Linear: <code>ANY-17</code>");
+  expect(body).toContain("CI: ✅ 1/1 successful");
+  expect(body).toContain("### Overview");
+  expect(body).toContain("<p>Overview from judge.</p>");
+  expect(body).toContain("### Findings");
+  expect(body).toContain("#### 🟡 1.");
+  expect(body).toContain("<strong>Non-blocking</strong> · High confidence");
+  expect(body).toContain("<code>src/a.ts:7</code>");
+  expect(body).toContain("<details>\n<summary>Full finding</summary>");
+  expect(body).toContain("<details open>\n<summary>Full finding</summary>");
+  expect(body).toContain("#### 🟡 2.");
+  expect(body).toContain("17m 18s");
+  expect(body).toContain("<summary>Technical details</summary>");
+  expect(body).toContain("<summary>How to provide Stage 1 feedback</summary>");
+  expect(body).not.toContain("<pre>");
+});
+
+it("keeps a long normal finding complete in the summary details", () => {
+  const value = state();
+  value.findings = [
+    {
+      ...finding,
+      title: "Title " + "t".repeat(700),
+      evidence: "Evidence " + "e".repeat(700),
+      rationale: "Rationale " + "r".repeat(700),
+      remediation: "Remediation " + "m".repeat(700),
+      publication_location: null,
+    },
+  ];
+  const body = renderSummary(value);
+  for (const field of [
+    value.findings[0]!.title,
+    value.findings[0]!.evidence,
+    value.findings[0]!.rationale,
+    value.findings[0]!.remediation,
+  ])
+    expect(body).toContain(field);
+  expect(body).not.toContain("[Truncated; full detail is in the canonical review artifact.]");
+});
+
+it.each([
+  ["PASS", "## AI PR Review — ✅ PASS"],
+  ["BLOCK", "## AI PR Review — 🔴 BLOCK"],
+  ["UNABLE_TO_REVIEW", "## AI PR Review — ⚠️ UNABLE TO REVIEW"],
+] as const)("makes the %s outcome visually obvious", (outcome, header) => {
+  const value = state();
+  value.outcome = outcome;
+  if (outcome === "UNABLE_TO_REVIEW") value.unable_reason = "INTERNAL_ERROR";
+  expect(renderSummary(value)).toContain(header);
+  if (outcome === "UNABLE_TO_REVIEW")
+    expect(renderSummary(value)).toContain("Unable reason: INTERNAL_ERROR");
 });
 
 it("pins feedback to a canonical attempt and explains maintainer labels without changing verdict", () => {

@@ -1,9 +1,18 @@
 import { createHash } from "node:crypto";
 import { CENTRAL_CONFIG } from "../config/central-config.js";
+import type { FindingBasis } from "../contracts/common.js";
 import type { JudgeResultV1 } from "../contracts/judge-result.js";
 import type { ReviewIdentityV1 } from "../contracts/review-identity.js";
 import type { ReviewFindingV1 } from "../contracts/review-state.js";
 import type { DiffIndex } from "../contracts/review-context.js";
+
+const MAX_GITHUB_BODY_BYTES = 60_000;
+const basisLabels: Record<FindingBasis, string> = {
+  code: "Code",
+  ci: "CI",
+  requirements: "Requirements",
+  policy: "Policy",
+};
 
 export function buildReviewFindings(
   result: JudgeResultV1,
@@ -34,35 +43,117 @@ export function findingFingerprint(headSha: string, finding: ReviewFindingV1): s
     .slice(0, 24);
 }
 
-// HTML pre blocks disable Markdown, autolinks and mentions. Escape before wrapping so
-// untrusted text cannot close the block or manufacture our hidden control markers.
-export function renderText(text: string, maxBytes = 2000): string {
-  const escape = (value: string) =>
-    value
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/@/g, "&#64;")
-      .replace(/[\p{Cc}\p{Cf}]/gu, (char) => (char === "\n" || char === "\t" ? char : ""));
-  let escaped = text.length <= maxBytes ? escape(text) : "";
-  if (text.length > maxBytes || Buffer.byteLength(escaped, "utf8") > maxBytes) {
-    // At most six escaped bytes per UTF-16 unit. Keep both ends so canonical
-    // trailing history disclosures survive, without interpreting their prose.
-    const length = Math.floor((maxBytes - 100) / 12);
-    const start = text.slice(0, length).replace(/[\uD800-\uDBFF]$/u, "");
-    const end = text.slice(-length).replace(/^[\uDC00-\uDFFF]/u, "");
-    escaped = `${escape(start)}\n[Truncated; full detail is in the canonical artifact.]\n${escape(end)}`;
-  }
-  return `<pre>${escaped}</pre>`;
+function normalizeForPresentation(text: string): string {
+  return text
+    .replace(/\r\n?/g, "\n")
+    .replace(/[\p{Cc}\p{Cf}]/gu, (char) => (char === "\n" || char === "\t" ? char : ""));
 }
-export function renderFinding(finding: ReviewFindingV1): string {
+
+function escapeHtml(text: string): string {
+  return normalizeForPresentation(text)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/@/g, "&#64;");
+}
+
+// Encode Markdown punctuation as entities so model prose remains text even outside an HTML block.
+export function renderSafeText(text: string): string {
+  return [...normalizeForPresentation(text)]
+    .map((char) => {
+      if (char === "\n") return "<br>\n";
+      if (char === "\t") return "&#9;";
+      return (
+        (
+          {
+            "&": "&amp;",
+            "<": "&lt;",
+            ">": "&gt;",
+            "@": "&#64;",
+            "\\": "&#92;",
+            "`": "&#96;",
+            "*": "&#42;",
+            _: "&#95;",
+            "~": "&#126;",
+            "[": "&#91;",
+            "]": "&#93;",
+            "(": "&#40;",
+            ")": "&#41;",
+            "#": "&#35;",
+            "!": "&#33;",
+            ":": "&#58;",
+            "/": "&#47;",
+          } as Record<string, string>
+        )[char] ?? char
+      );
+    })
+    .join("");
+}
+
+export function renderProse(text: string): string {
+  return `<p>${renderSafeText(text)}</p>`;
+}
+
+export function renderCode(text: string): string {
+  return `<code>${escapeHtml(text)}</code>`;
+}
+
+// Kept as a compatibility alias for callers that used the old helper; prose is no longer preformatted.
+export function renderText(text: string, _maxBytes?: number): string {
+  return renderProse(text);
+}
+
+function severityLabel(finding: ReviewFindingV1): string {
+  return finding.severity === "blocking" ? "🔴 Blocking" : "🟡 Non-blocking";
+}
+
+function confidenceLabel(finding: ReviewFindingV1): string {
+  return `${finding.confidence[0]!.toUpperCase()}${finding.confidence.slice(1)} confidence`;
+}
+
+function basisLabel(finding: ReviewFindingV1): string {
+  return finding.basis.map((basis) => basisLabels[basis]).join(" · ");
+}
+
+function fullFinding(finding: ReviewFindingV1): string {
   return [
-    renderText(`Severity: ${finding.severity}\nConfidence: ${finding.confidence}`),
-    ...(["title", "evidence", "rationale", "remediation"] as const).map((field) =>
-      renderText(`${field[0]!.toUpperCase()}${field.slice(1)}: ${finding[field]}`, 450),
-    ),
+    `<strong>${severityLabel(finding)}</strong> · <strong>${confidenceLabel(finding)}</strong>`,
+    `Basis: ${basisLabel(finding)}`,
+    "",
+    `<strong>${renderSafeText(finding.title)}</strong>`,
+    "",
+    "<strong>Evidence</strong>",
+    renderProse(finding.evidence),
+    "",
+    "<strong>Why this matters</strong>",
+    renderProse(finding.rationale),
+    "",
+    "<strong>Suggested fix</strong>",
+    renderProse(finding.remediation),
   ].join("\n");
 }
+
+function oversizedFinding(finding: ReviewFindingV1): string {
+  return [
+    `<strong>${severityLabel(finding)}</strong> · <strong>${confidenceLabel(finding)}</strong>`,
+    `Basis: ${basisLabel(finding)}`,
+    "",
+    "<strong>Exceptional size condition</strong>",
+    renderProse("Finding is too large for safe GitHub inline publication."),
+    renderProse("Full sanitized detail is retained in the canonical review artifact."),
+  ].join("\n");
+}
+
+export function renderFinding(finding: ReviewFindingV1): string {
+  const rendered = fullFinding(finding);
+  return Buffer.byteLength(rendered, "utf8") <= MAX_GITHUB_BODY_BYTES
+    ? rendered
+    : oversizedFinding(finding);
+}
+
 export function renderInlineFinding(headSha: string, finding: ReviewFindingV1): string {
-  return `${renderFinding(finding)}\n\n<!-- ${CENTRAL_CONFIG.findingMarkerPrefix}:${findingFingerprint(headSha, finding)} -->`;
+  const marker = `<!-- ${CENTRAL_CONFIG.findingMarkerPrefix}:${findingFingerprint(headSha, finding)} -->`;
+  const rendered = `${renderFinding(finding)}\n\n${marker}`;
+  if (Buffer.byteLength(rendered, "utf8") <= MAX_GITHUB_BODY_BYTES) return rendered;
+  return `${oversizedFinding(finding)}\n\n${marker}`;
 }
