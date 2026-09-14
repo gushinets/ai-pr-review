@@ -278,4 +278,3 @@ Stage 1 is accepted and remains informational.
 - Runtime code changed: NO.
 - Workflows changed: NO.
 - Consumer pins changed: NO.
-- Final state: `TASK 22 MERGE APPROVAL REQUIRED`.
