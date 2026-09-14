@@ -311,6 +311,26 @@ it("keeps a pathological UTF-8 report within the safe body budget with an explic
   expect(value).toEqual(original);
 });
 
+it("bounds a pathological Linear header without losing the mandatory review identity", () => {
+  const value = state();
+  const linearIssue = "ANY-" + "9".repeat(70000);
+  value.review_identity!.linear_issue = linearIssue;
+  value.lineage.linear_issue = linearIssue;
+
+  const body = renderSummary(value);
+
+  expect(Buffer.byteLength(body, "utf8")).toBeLessThanOrEqual(60000);
+  expect(body).toContain("AI PR Review — ✅ PASS");
+  expect(body).toContain("Verdict: PASS");
+  expect(body).toContain("b".repeat(40));
+  expect(body).toContain("Exceptional size condition");
+  expect(body).not.toContain(linearIssue);
+  expect(body).not.toContain("�");
+  expect(() =>
+    new TextDecoder("utf-8", { fatal: true }).decode(Buffer.from(body, "utf8")),
+  ).not.toThrow();
+});
+
 it("uses the V2 summary layout, collapses anchored details, and keeps unanchored details open", () => {
   const value = state();
   value.findings = [

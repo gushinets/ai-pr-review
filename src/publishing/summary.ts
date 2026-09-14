@@ -4,6 +4,7 @@ import type { ReviewStateV1 } from "../contracts/review-state.js";
 import { renderCode, renderFinding, renderProse, renderSafeText } from "./findings.js";
 
 const MAX_SUMMARY_BYTES = 60_000;
+const MAX_VISIBLE_LINEAR_ISSUE_BYTES = 256;
 const SIZE_NOTICE = [
   "<strong>Exceptional size condition</strong>",
   renderProse(
@@ -97,6 +98,20 @@ function visibleCounts(state: ReviewStateV1): string {
   return `**${state.findings.length} findings** · ${blocking} blocking · ${state.findings.length - blocking} non-blocking`;
 }
 
+function visibleLinearIssue(linearIssue: string | null): string {
+  const value = linearIssue ?? "unknown";
+  if (Buffer.byteLength(value, "utf8") <= MAX_VISIBLE_LINEAR_ISSUE_BYTES) return renderCode(value);
+  return renderCode(
+    `[oversized Linear identifier omitted (${Buffer.byteLength(value, "utf8")} bytes)]`,
+  );
+}
+
+function hasOversizedLinearIssue(linearIssue: string | null): boolean {
+  return (
+    linearIssue !== null && Buffer.byteLength(linearIssue, "utf8") > MAX_VISIBLE_LINEAR_ISSUE_BYTES
+  );
+}
+
 function visibleCiCounts(state: ReviewStateV1): string {
   if (state.ci_summary === null) return "CI: ⚠️ unavailable";
   const checks = state.ci_summary.checks;
@@ -130,7 +145,7 @@ function visibleHeader(state: ReviewStateV1): string {
     outcomeHeading(state),
     "Verdict: " + state.outcome,
     visibleCounts(state),
-    `Head: ${renderCode(state.attempt_identity.head_sha)} · Linear: ${renderCode(state.lineage.linear_issue ?? "unknown")}`,
+    `Head: ${renderCode(state.attempt_identity.head_sha)} · Linear: ${visibleLinearIssue(state.lineage.linear_issue)}`,
     visibleCiCounts(state),
     ...historical,
     ...(state.unable_reason === null ? [] : [`Unable reason: ${state.unable_reason}`]),
@@ -332,6 +347,7 @@ export function renderSummary(state: ReviewStateV1): string {
   const historical = state.resolution_result === null ? null : historicalDetails(state);
   const technical = technicalDetails(state);
   const empty: Array<string | null> = state.findings.map(() => null);
+  const sizeNotice = hasOversizedLinearIssue(state.lineage.linear_issue) ? SIZE_NOTICE : null;
   const complete = assemble(
     state,
     overview,
@@ -339,7 +355,7 @@ export function renderSummary(state: ReviewStateV1): string {
     unanchored,
     historical,
     technical,
-    null,
+    sizeNotice,
     true,
   );
   if (bytes(complete) <= MAX_SUMMARY_BYTES)
