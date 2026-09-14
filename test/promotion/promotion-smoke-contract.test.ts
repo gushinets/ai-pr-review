@@ -366,7 +366,7 @@ it.each([
   expect(JSON.stringify(cli.sanitizedEvidence(result))).not.toContain("private-body-canary");
 });
 
-it("keeps the production adapter's shared 20-minute deadline across resume", async () => {
+it("keeps the production adapter's shared 35-minute deadline across resume", async () => {
   const cli = await smoke();
   const calls = responses(["invalid"]);
   const dir = await directory();
@@ -374,7 +374,7 @@ it("keeps the production adapter's shared 20-minute deadline across resume", asy
   const engine = createRejudgeEngine();
   const input = { ...snapshot, prompt: "fresh", outputInstructions: "strict" };
   await engine.fresh(input);
-  vi.spyOn(Date, "now").mockReturnValue(Date.now() + 20 * 60 * 1000 + 1);
+  vi.spyOn(Date, "now").mockReturnValue(Date.now() + 35 * 60 * 1000 + 1);
   await expect(engine.resume({ ...input, runId })).rejects.toMatchObject({ stage: "resume" });
   assertPanel(calls, 1);
 });
