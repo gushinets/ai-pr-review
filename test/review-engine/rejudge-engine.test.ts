@@ -501,7 +501,7 @@ it("rejects a child failure whose stage is not a string", async () => {
   );
   await expect(createRejudgeEngine().fresh(input)).rejects.toMatchObject({ stage: "setup" });
 });
-it("shares and clamps the original 35-minute job deadline across resume calls", async () => {
+it("shares and clamps the original 50-minute job deadline across resume calls", async () => {
   canaries();
   const { dir, input } = await layout();
   await childFixture(
@@ -511,7 +511,7 @@ it("shares and clamps the original 35-minute job deadline across resume calls", 
   const now = Date.now();
   const engine = createRejudgeEngine({ deadline: now + 60 * 60 * 1000 });
   await engine.fresh(input);
-  const clock = vi.spyOn(Date, "now").mockReturnValue(now + 35 * 60 * 1000 + 1);
+  const clock = vi.spyOn(Date, "now").mockReturnValue(now + 50 * 60 * 1000 + 1);
   try {
     await expect(engine.resume({ ...input, runId: id })).rejects.toMatchObject({ stage: "resume" });
     expect(nodeSpawn).toHaveBeenCalledTimes(1);
