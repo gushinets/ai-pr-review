@@ -8,6 +8,15 @@ import {
 } from "../contracts/failure-reasons.js";
 import { buildWorkerEnv } from "../sandbox/worker-env.js";
 import {
+  emptyPersistedModelTelemetry,
+  finalizeRuntimeModelTelemetry,
+  mergePersistedModelTelemetry,
+  MODEL_TELEMETRY_PREFIX,
+  parseRuntimeModelTelemetry,
+  type PersistedModelTelemetry,
+  type RuntimeModelTelemetry,
+} from "./model-telemetry.js";
+import {
   parseWorkerRequest,
   RUN_ID_PATTERN,
   safeWorkerDiagnostic,
@@ -28,6 +37,7 @@ export interface RejudgeRun {
 export interface RejudgeEngine {
   fresh(input: RunInput): Promise<RejudgeRun>;
   resume(input: RunInput & { runId: string }): Promise<RejudgeRun>;
+  modelTelemetry?(reviewRoot: string): PersistedModelTelemetry[];
 }
 export class RejudgeEngineError extends Error {
   readonly reason:
@@ -48,6 +58,7 @@ export class RejudgeEngineError extends Error {
     this.model = model;
   }
 }
+
 function parseResponse(text: string): RejudgeWorkerResponse {
   if (!text.endsWith("\n") || text.indexOf("\n") !== text.length - 1)
     throw new Error("INVALID_WORKER_RESPONSE");
@@ -55,9 +66,14 @@ function parseResponse(text: string): RejudgeWorkerResponse {
   if (typeof value !== "object" || value === null || Array.isArray(value))
     throw new Error("INVALID_WORKER_RESPONSE");
   const v = value as Record<string, unknown>;
+  const modelTelemetry =
+    v.model_telemetry === undefined ? undefined : parseRuntimeModelTelemetry(v.model_telemetry);
+  if (v.model_telemetry !== undefined && modelTelemetry === null)
+    throw new Error("INVALID_WORKER_RESPONSE");
+  const telemetryKey = v.model_telemetry === undefined ? [] : ["model_telemetry"];
   const keys =
     v.ok === true
-      ? ["schema_version", "ok", "answer", "run_id"]
+      ? ["schema_version", "ok", "answer", "run_id", ...telemetryKey]
       : [
           "schema_version",
           "ok",
@@ -65,6 +81,7 @@ function parseResponse(text: string): RejudgeWorkerResponse {
           "model",
           "message",
           ...(v.provider_reason === undefined ? [] : ["provider_reason"]),
+          ...telemetryKey,
         ];
   if (
     v.schema_version !== 1 ||
@@ -90,6 +107,35 @@ function parseResponse(text: string): RejudgeWorkerResponse {
     return v as RejudgeWorkerResponse;
   throw new Error("INVALID_WORKER_RESPONSE");
 }
+
+function stderrTelemetry(text: string): {
+  telemetry: RuntimeModelTelemetry[];
+  hasDiagnostic: boolean;
+} {
+  const latest = new Map<RuntimeModelTelemetry["role"], RuntimeModelTelemetry>();
+  let hasDiagnostic = false;
+  for (const line of text.split("\n")) {
+    if (!line) continue;
+    if (!line.startsWith(MODEL_TELEMETRY_PREFIX)) {
+      hasDiagnostic = true;
+      continue;
+    }
+    try {
+      const parsed = parseRuntimeModelTelemetry(
+        JSON.parse(line.slice(MODEL_TELEMETRY_PREFIX.length)),
+      );
+      if (parsed === null) {
+        hasDiagnostic = true;
+        continue;
+      }
+      for (const entry of parsed) latest.set(entry.role, entry);
+    } catch {
+      hasDiagnostic = true;
+    }
+  }
+  return { telemetry: [...latest.values()], hasDiagnostic };
+}
+
 export function createRejudgeEngine(
   options: {
     deadline?: number;
@@ -101,9 +147,18 @@ export function createRejudgeEngine(
     options.deadline ?? Infinity,
     Date.now() + CENTRAL_CONFIG.reviewTimeoutMs,
   );
-  const attempts = new Map<string, { runtimeDir: string; runId?: string; busy: boolean }>();
+  const attempts = new Map<
+    string,
+    {
+      runtimeDir: string;
+      runId?: string;
+      busy: boolean;
+      telemetry: PersistedModelTelemetry[];
+    }
+  >();
   const diagnostic =
     options.diagnostic ?? ((message: string) => process.stderr.write(`${message}\n`));
+
   async function execute(input: RunInput, runId?: string): Promise<RejudgeRun> {
     const stage = runId === undefined ? "setup" : "resume";
     const fail = () => new RejudgeEngineError(stage);
@@ -112,7 +167,11 @@ export function createRejudgeEngine(
       throw fail();
     if (runId === undefined) {
       if (previous) throw fail();
-      attempts.set(input.reviewRoot, { runtimeDir: input.runtimeDir, busy: true });
+      attempts.set(input.reviewRoot, {
+        runtimeDir: input.runtimeDir,
+        busy: true,
+        telemetry: emptyPersistedModelTelemetry(),
+      });
     } else if (
       !RUN_ID_PATTERN.test(runId) ||
       !previous ||
@@ -123,6 +182,16 @@ export function createRejudgeEngine(
       throw fail();
     const attempt = attempts.get(input.reviewRoot)!;
     attempt.busy = true;
+    const current = new Map<RuntimeModelTelemetry["role"], RuntimeModelTelemetry>();
+    const observe = (entries: readonly RuntimeModelTelemetry[] | undefined) => {
+      for (const entry of entries ?? []) current.set(entry.role, entry);
+    };
+    const commit = (cause: "completed" | "deadline" | "cancelled" | "failed") => {
+      attempt.telemetry = mergePersistedModelTelemetry(
+        attempt.telemetry,
+        finalizeRuntimeModelTelemetry([...current.values()], cause, Date.now()),
+      );
+    };
     try {
       const request: RejudgeWorkerRequest = parseWorkerRequest({
         schema_version: 1,
@@ -137,16 +206,25 @@ export function createRejudgeEngine(
       if (Date.now() >= deadline || options.signal?.aborted) throw fail();
       const response = await new Promise<RejudgeWorkerResponse>((resolve, reject) => {
         const controller = new AbortController();
-        const abort = () => controller.abort();
-        options.signal?.addEventListener("abort", abort, { once: true });
-        const timer = setTimeout(abort, Math.max(0, deadline - Date.now()));
+        let deadlineAborted = false,
+          externalAborted = false;
+        const externalAbort = () => {
+          externalAborted = true;
+          controller.abort();
+        };
+        const deadlineAbort = () => {
+          deadlineAborted = true;
+          controller.abort();
+        };
+        options.signal?.addEventListener("abort", externalAbort, { once: true });
+        const timer = setTimeout(deadlineAbort, Math.max(0, deadline - Date.now()));
         let stdout = "",
           stderr = "",
           oversized = false,
           childError = false;
         const clean = () => {
           clearTimeout(timer);
-          options.signal?.removeEventListener("abort", abort);
+          options.signal?.removeEventListener("abort", externalAbort);
         };
         try {
           const child = spawn(
@@ -166,13 +244,13 @@ export function createRejudgeEngine(
           child.stdout.on("data", (chunk: string) => {
             if (Buffer.byteLength(stdout) + Buffer.byteLength(chunk) > 4 * 1024 * 1024) {
               oversized = true;
-              abort();
+              controller.abort();
             } else stdout += chunk;
           });
           child.stderr.on("data", (chunk: string) => {
             if (stderr.length + chunk.length > 64 * 1024) {
               oversized = true;
-              abort();
+              controller.abort();
             } else stderr += chunk;
           });
           child.on("error", () => {
@@ -183,28 +261,28 @@ export function createRejudgeEngine(
           });
           child.on("close", (code) => {
             clean();
-            // Never persist provider errors or expose child output in the owned error object.
-            if (stderr && !oversized) {
-              const code = stderr.trim();
-              diagnostic(
-                isProviderFailureReason(code) || code === "PI_CONFINEMENT_CONTRACT_FAILED"
-                  ? code
-                  : "Rejudge worker diagnostic",
-              );
-            }
+            const observed = stderrTelemetry(stderr);
+            observe(observed.telemetry);
+            if (observed.hasDiagnostic && !oversized) diagnostic("Rejudge worker diagnostic");
             if (code !== 0 || childError || oversized || controller.signal.aborted) {
+              commit(deadlineAborted ? "deadline" : externalAborted ? "cancelled" : "failed");
               reject(fail());
               return;
             }
             try {
-              resolve(parseResponse(stdout));
+              const parsed = parseResponse(stdout);
+              observe(parsed.model_telemetry);
+              commit(parsed.ok ? "completed" : "failed");
+              resolve(parsed);
             } catch {
+              commit("failed");
               reject(fail());
             }
           });
           child.stdin.end(JSON.stringify(request) + "\n");
         } catch {
           clean();
+          commit("failed");
           reject(fail());
         }
       });
@@ -232,5 +310,9 @@ export function createRejudgeEngine(
         throw new RejudgeEngineError("resume");
       return execute(input, input.runId);
     },
+    modelTelemetry: (reviewRoot) =>
+      (attempts.get(reviewRoot)?.telemetry ?? emptyPersistedModelTelemetry()).map((entry) => ({
+        ...entry,
+      })),
   };
 }
