@@ -156,7 +156,7 @@ describe("central reusable workflow security contract", () => {
     });
     for (const job of [preflight!, publisher!])
       expect(JSON.stringify(job)).not.toMatch(/QWEN|LINEAR|ALIBABA/);
-    expect(review!["timeout-minutes"]).toBe(40);
+    expect(review!["timeout-minutes"]).toBe(55);
     expect(review!.needs).toBe("preflight");
     expect(review!.if).toBe(
       "needs.preflight.outputs.status == 'READY' || needs.preflight.outputs.status == 'UNABLE_TO_REVIEW'",
@@ -196,8 +196,8 @@ describe("central reusable workflow security contract", () => {
   it("keeps the GitHub review timeout above the engine deadline", () => {
     const githubReviewTimeoutMinutes = workflow().jobs.review!["timeout-minutes"]!;
 
-    expect(CENTRAL_CONFIG.reviewTimeoutMs).toBe(35 * 60 * 1000);
-    expect(githubReviewTimeoutMinutes).toBe(40);
+    expect(CENTRAL_CONFIG.reviewTimeoutMs).toBe(50 * 60 * 1000);
+    expect(githubReviewTimeoutMinutes).toBe(55);
     expect(githubReviewTimeoutMinutes * 60_000).toBeGreaterThan(CENTRAL_CONFIG.reviewTimeoutMs);
     expect(
       githubReviewTimeoutMinutes * 60_000 - CENTRAL_CONFIG.reviewTimeoutMs,

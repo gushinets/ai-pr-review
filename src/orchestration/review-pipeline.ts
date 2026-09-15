@@ -175,7 +175,56 @@ function initialState(
       started_at: startedAt,
       finished_at: startedAt,
       duration_ms: 0,
-      models: [],
+      models: [
+        {
+          role: "reviewer_1",
+          model_id: "qwen-token-plan/qwen3.8-flash",
+          requested_reasoning: CENTRAL_CONFIG.reviewers[0].level,
+          effective_reasoning: getTokenPlanEffectiveReasoning(
+            "qwen-token-plan/qwen3.8-flash",
+            CENTRAL_CONFIG.reviewers[0].level,
+          ),
+          provider_reported_model_id: null,
+          status: "not_started",
+          duration_ms: null,
+        },
+        {
+          role: "reviewer_2",
+          model_id: "qwen-token-plan/deepseek-v4-pro-0813",
+          requested_reasoning: CENTRAL_CONFIG.reviewers[1].level,
+          effective_reasoning: getTokenPlanEffectiveReasoning(
+            "qwen-token-plan/deepseek-v4-pro-0813",
+            CENTRAL_CONFIG.reviewers[1].level,
+          ),
+          provider_reported_model_id: null,
+          status: "not_started",
+          duration_ms: null,
+        },
+        {
+          role: "reviewer_3",
+          model_id: "qwen-token-plan/glm-5.2",
+          requested_reasoning: CENTRAL_CONFIG.reviewers[2].level,
+          effective_reasoning: getTokenPlanEffectiveReasoning(
+            "qwen-token-plan/glm-5.2",
+            CENTRAL_CONFIG.reviewers[2].level,
+          ),
+          provider_reported_model_id: null,
+          status: "not_started",
+          duration_ms: null,
+        },
+        {
+          role: "judge",
+          model_id: "qwen-token-plan/qwen3.8-max",
+          requested_reasoning: CENTRAL_CONFIG.judge.level,
+          effective_reasoning: getTokenPlanEffectiveReasoning(
+            "qwen-token-plan/qwen3.8-max",
+            CENTRAL_CONFIG.judge.level,
+          ),
+          provider_reported_model_id: null,
+          status: "not_started",
+          duration_ms: null,
+        },
+      ],
       judge_repair_attempts: 0,
       closure_used: false,
       rejudge_status: "not_started",
@@ -518,6 +567,21 @@ function previousBlockers(
   return { blockers: [...blockers.values()], availability };
 }
 
+function applyModelTelemetry(
+  state: Omit<ReviewStateV1, "schema_version" | "findings">,
+  engine: RejudgeEngine | undefined,
+  reviewRoot: string | null,
+): void {
+  if (!engine?.modelTelemetry || reviewRoot === null) return;
+  const byRole = new Map(engine.modelTelemetry(reviewRoot).map((entry) => [entry.role, entry]));
+  state.telemetry.models = state.telemetry.models.map((model) => {
+    const timing = byRole.get(model.role);
+    return timing === undefined
+      ? model
+      : { ...model, status: timing.status, duration_ms: timing.duration_ms };
+  });
+}
+
 export async function executeReview(
   input: ReviewInput,
   dependencies: ExecuteDependencies,
@@ -527,7 +591,9 @@ export async function executeReview(
   const privacy = sources(dependencies.secretValues);
   let historyAvailability: HistoricalVerificationAvailability = "complete";
   let diff = emptyDiff,
-    stage: UnableReason = "INTERNAL_ERROR";
+    stage: UnableReason = "INTERNAL_ERROR",
+    engine: RejudgeEngine | undefined,
+    reviewRootForTelemetry: string | null = null;
   try {
     const {
       prepared,
@@ -536,6 +602,7 @@ export async function executeReview(
       diff: index,
       containsLocation,
     } = await readPrepared(input);
+    reviewRootForTelemetry = reviewRoot;
     diff = index;
     privacy.privateTexts = prepared.privateTexts;
     state.telemetry.started_at = prepared.started_at;
@@ -556,20 +623,11 @@ export async function executeReview(
     assertTokenPlanRuntimeContract();
     await buildWorkerEnv({ reviewRoot, runtimeDir });
     await writeTokenPlanConfig(runtimeDir);
-    const engine =
+    engine =
       dependencies.engine ??
       createRejudgeEngine({
         deadline: Date.parse(prepared.started_at) + CENTRAL_CONFIG.reviewTimeoutMs,
       });
-    state.telemetry.models = [...CENTRAL_CONFIG.reviewers, CENTRAL_CONFIG.judge].map(
-      (model, i) => ({
-        role: (["reviewer_1", "reviewer_2", "reviewer_3", "judge"] as const)[i]!,
-        model_id: model.model,
-        requested_reasoning: model.level,
-        effective_reasoning: getTokenPlanEffectiveReasoning(model.model, model.level),
-        provider_reported_model_id: null,
-      }),
-    );
     stage = "REJUDGE_JUDGE_FAILED";
     const fresh = await getValidJudgeResult(
       engine,
@@ -642,7 +700,7 @@ export async function executeReview(
     state.judge_result = null;
     state.resolution_result = null;
     if (error instanceof JudgeRepairError) state.telemetry.judge_repair_attempts = 1;
-    if (state.telemetry.models.length) {
+    if (engine !== undefined) {
       state.telemetry.rejudge_status = "failed";
       state.telemetry.rejudge_failed_stage =
         state.telemetry.closure_used || error instanceof JudgeRepairError
@@ -653,6 +711,7 @@ export async function executeReview(
             : "judge";
     }
   }
+  applyModelTelemetry(state, engine, reviewRootForTelemetry);
   return finish(input, dependencies.github, state, privacy, diff, historyAvailability);
 }
 
