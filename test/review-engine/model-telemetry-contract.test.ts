@@ -18,7 +18,7 @@ function stateWithTelemetry(): ReviewStateV1 {
     head_sha: "b".repeat(40),
     engine_sha: "c".repeat(40),
   };
-  return {
+  const value = {
     schema_version: 1,
     attempt_identity: attempt,
     review_identity: { ...attempt, linear_issue: "ANY-499" },
@@ -77,6 +77,7 @@ function stateWithTelemetry(): ReviewStateV1 {
       estimated_cost_usd: null,
     },
   };
+  return value as unknown as ReviewStateV1;
 }
 
 it("uses a 50-minute engine deadline with a 55-minute GitHub safety ceiling", () => {
@@ -104,7 +105,14 @@ it("accepts new per-model status/duration fields and renders them in technical d
 
 it("keeps old V1 model records without timing fields valid", () => {
   const state = stateWithTelemetry();
-  state.telemetry.models = state.telemetry.models.map(({ status: _status, duration_ms: _duration, ...model }) => model);
+  state.telemetry.models = state.telemetry.models.map((model) => {
+    const {
+      status: _status,
+      duration_ms: _duration,
+      ...legacy
+    } = model as typeof model & { status?: string; duration_ms?: number | null };
+    return legacy;
+  });
   expect(validateReviewState(state).ok).toBe(true);
 });
 
@@ -146,11 +154,14 @@ it("extracts only whitelisted per-model timing from Rejudge progress details", (
       { role: "reviewer_2", status: "running", duration_ms: null, started_at_ms: 2_000 },
     ],
   });
-  expect(JSON.stringify(response)).not.toMatch(/PRIVATE_PROVIDER_BODY|PRIVATE_MODEL_TEXT|PRIVATE_THINKING/);
+  expect(JSON.stringify(response)).not.toMatch(
+    /PRIVATE_PROVIDER_BODY|PRIVATE_MODEL_TEXT|PRIVATE_THINKING/,
+  );
 });
 
 it("exposes accumulated model telemetry on the engine without changing verdict semantics", () => {
   const engine = createRejudgeEngine();
-  const getter = (engine as unknown as { modelTelemetry?: (reviewRoot: string) => unknown }).modelTelemetry;
+  const getter = (engine as unknown as { modelTelemetry?: (reviewRoot: string) => unknown })
+    .modelTelemetry;
   expect(getter).toBeTypeOf("function");
 });
