@@ -700,7 +700,7 @@ export async function executeReview(
     state.judge_result = null;
     state.resolution_result = null;
     if (error instanceof JudgeRepairError) state.telemetry.judge_repair_attempts = 1;
-    if (state.telemetry.models.length) {
+    if (engine !== undefined) {
       state.telemetry.rejudge_status = "failed";
       state.telemetry.rejudge_failed_stage =
         state.telemetry.closure_used || error instanceof JudgeRepairError
