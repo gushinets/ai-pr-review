@@ -518,6 +518,21 @@ function previousBlockers(
   return { blockers: [...blockers.values()], availability };
 }
 
+function applyModelTelemetry(
+  state: Omit<ReviewStateV1, "schema_version" | "findings">,
+  engine: RejudgeEngine | undefined,
+  reviewRoot: string | null,
+): void {
+  if (!engine?.modelTelemetry || reviewRoot === null) return;
+  const byRole = new Map(engine.modelTelemetry(reviewRoot).map((entry) => [entry.role, entry]));
+  state.telemetry.models = state.telemetry.models.map((model) => {
+    const timing = byRole.get(model.role);
+    return timing === undefined
+      ? model
+      : { ...model, status: timing.status, duration_ms: timing.duration_ms };
+  });
+}
+
 export async function executeReview(
   input: ReviewInput,
   dependencies: ExecuteDependencies,
@@ -527,7 +542,9 @@ export async function executeReview(
   const privacy = sources(dependencies.secretValues);
   let historyAvailability: HistoricalVerificationAvailability = "complete";
   let diff = emptyDiff,
-    stage: UnableReason = "INTERNAL_ERROR";
+    stage: UnableReason = "INTERNAL_ERROR",
+    engine: RejudgeEngine | undefined,
+    reviewRootForTelemetry: string | null = null;
   try {
     const {
       prepared,
@@ -536,6 +553,7 @@ export async function executeReview(
       diff: index,
       containsLocation,
     } = await readPrepared(input);
+    reviewRootForTelemetry = reviewRoot;
     diff = index;
     privacy.privateTexts = prepared.privateTexts;
     state.telemetry.started_at = prepared.started_at;
@@ -556,7 +574,7 @@ export async function executeReview(
     assertTokenPlanRuntimeContract();
     await buildWorkerEnv({ reviewRoot, runtimeDir });
     await writeTokenPlanConfig(runtimeDir);
-    const engine =
+    engine =
       dependencies.engine ??
       createRejudgeEngine({
         deadline: Date.parse(prepared.started_at) + CENTRAL_CONFIG.reviewTimeoutMs,
@@ -568,6 +586,8 @@ export async function executeReview(
         requested_reasoning: model.level,
         effective_reasoning: getTokenPlanEffectiveReasoning(model.model, model.level),
         provider_reported_model_id: null,
+        status: "not_started" as const,
+        duration_ms: null,
       }),
     );
     stage = "REJUDGE_JUDGE_FAILED";
@@ -653,6 +673,7 @@ export async function executeReview(
             : "judge";
     }
   }
+  applyModelTelemetry(state, engine, reviewRootForTelemetry);
   return finish(input, dependencies.github, state, privacy, diff, historyAvailability);
 }
 
