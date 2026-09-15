@@ -175,7 +175,56 @@ function initialState(
       started_at: startedAt,
       finished_at: startedAt,
       duration_ms: 0,
-      models: [],
+      models: [
+        {
+          role: "reviewer_1",
+          model_id: "qwen-token-plan/qwen3.8-flash",
+          requested_reasoning: CENTRAL_CONFIG.reviewers[0].level,
+          effective_reasoning: getTokenPlanEffectiveReasoning(
+            "qwen-token-plan/qwen3.8-flash",
+            CENTRAL_CONFIG.reviewers[0].level,
+          ),
+          provider_reported_model_id: null,
+          status: "not_started",
+          duration_ms: null,
+        },
+        {
+          role: "reviewer_2",
+          model_id: "qwen-token-plan/deepseek-v4-pro-0813",
+          requested_reasoning: CENTRAL_CONFIG.reviewers[1].level,
+          effective_reasoning: getTokenPlanEffectiveReasoning(
+            "qwen-token-plan/deepseek-v4-pro-0813",
+            CENTRAL_CONFIG.reviewers[1].level,
+          ),
+          provider_reported_model_id: null,
+          status: "not_started",
+          duration_ms: null,
+        },
+        {
+          role: "reviewer_3",
+          model_id: "qwen-token-plan/glm-5.2",
+          requested_reasoning: CENTRAL_CONFIG.reviewers[2].level,
+          effective_reasoning: getTokenPlanEffectiveReasoning(
+            "qwen-token-plan/glm-5.2",
+            CENTRAL_CONFIG.reviewers[2].level,
+          ),
+          provider_reported_model_id: null,
+          status: "not_started",
+          duration_ms: null,
+        },
+        {
+          role: "judge",
+          model_id: "qwen-token-plan/qwen3.8-max",
+          requested_reasoning: CENTRAL_CONFIG.judge.level,
+          effective_reasoning: getTokenPlanEffectiveReasoning(
+            "qwen-token-plan/qwen3.8-max",
+            CENTRAL_CONFIG.judge.level,
+          ),
+          provider_reported_model_id: null,
+          status: "not_started",
+          duration_ms: null,
+        },
+      ],
       judge_repair_attempts: 0,
       closure_used: false,
       rejudge_status: "not_started",
@@ -579,17 +628,6 @@ export async function executeReview(
       createRejudgeEngine({
         deadline: Date.parse(prepared.started_at) + CENTRAL_CONFIG.reviewTimeoutMs,
       });
-    state.telemetry.models = [...CENTRAL_CONFIG.reviewers, CENTRAL_CONFIG.judge].map(
-      (model, i) => ({
-        role: (["reviewer_1", "reviewer_2", "reviewer_3", "judge"] as const)[i]!,
-        model_id: model.model,
-        requested_reasoning: model.level,
-        effective_reasoning: getTokenPlanEffectiveReasoning(model.model, model.level),
-        provider_reported_model_id: null,
-        status: "not_started" as const,
-        duration_ms: null,
-      }),
-    );
     stage = "REJUDGE_JUDGE_FAILED";
     const fresh = await getValidJudgeResult(
       engine,
