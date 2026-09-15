@@ -3,11 +3,7 @@ import { CENTRAL_CONFIG } from "../config/central-config.js";
 export type ModelTelemetryRole = "reviewer_1" | "reviewer_2" | "reviewer_3" | "judge";
 export type RuntimeModelTelemetryStatus = "running" | "completed" | "failed" | "cancelled";
 export type PersistedModelTelemetryStatus =
-  | "not_started"
-  | "completed"
-  | "failed"
-  | "timed_out"
-  | "cancelled";
+  "not_started" | "completed" | "failed" | "timed_out" | "cancelled";
 
 export interface RuntimeModelTelemetry {
   role: ModelTelemetryRole;
