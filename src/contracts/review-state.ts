@@ -67,6 +67,8 @@ export interface ReviewStateV1 {
       requested_reasoning: "medium" | "high" | "xhigh";
       provider_reported_model_id?: string | null;
       effective_reasoning: string | null;
+      status?: "not_started" | "completed" | "failed" | "timed_out" | "cancelled";
+      duration_ms?: number | null;
     }>;
     judge_repair_attempts: 0 | 1;
     closure_used: boolean;
@@ -143,6 +145,16 @@ const modelSchema = Type.Object(
       Type.Union([Type.String({ minLength: 1 }), Type.Null()]),
     ),
     effective_reasoning: Type.Union([Type.String({ minLength: 1 }), Type.Null()]),
+    status: Type.Optional(
+      Type.Union([
+        Type.Literal("not_started"),
+        Type.Literal("completed"),
+        Type.Literal("failed"),
+        Type.Literal("timed_out"),
+        Type.Literal("cancelled"),
+      ]),
+    ),
+    duration_ms: Type.Optional(Type.Union([Type.Number({ minimum: 0 }), Type.Null()])),
   },
   { additionalProperties: false },
 );
