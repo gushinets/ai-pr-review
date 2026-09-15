@@ -212,10 +212,16 @@ function tokenValue(value: number | null): string {
 function technicalDetails(state: ReviewStateV1): string {
   const telemetry = state.telemetry;
   const modelPanel = telemetry.models.length
-    ? telemetry.models.map(
-        (model) =>
-          `- ${model.role}: <code>${renderSafeText(model.model_id)}</code> · Requested reasoning: ${renderSafeText(model.requested_reasoning)} · Effective reasoning: ${renderSafeText(model.effective_reasoning ?? "unknown")}`,
-      )
+    ? telemetry.models.map((model) => {
+        const status = model.status ?? "unknown";
+        const duration =
+          model.duration_ms === undefined
+            ? "unknown"
+            : model.duration_ms === null
+              ? "n/a"
+              : formatDuration(model.duration_ms);
+        return `- ${model.role}: <code>${renderSafeText(model.model_id)}</code> · Requested reasoning: ${renderSafeText(model.requested_reasoning)} · Effective reasoning: ${renderSafeText(model.effective_reasoning ?? "unknown")} · Status: ${renderSafeText(status)} · Duration: ${renderSafeText(duration)}`;
+      })
     : ["- No model records available."];
   return [
     "<details>",
