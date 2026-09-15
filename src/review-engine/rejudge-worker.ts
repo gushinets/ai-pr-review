@@ -7,6 +7,11 @@ import { sanitizeCiLog } from "../github/ci-context.js";
 import { assertPiConfinementContract } from "../sandbox/pi-confinement-contract.js";
 import { buildWorkerEnv } from "../sandbox/worker-env.js";
 import { loadRejudgeTool } from "./rejudge-extension.js";
+import {
+  extractModelTelemetry,
+  MODEL_TELEMETRY_PREFIX,
+  type RuntimeModelTelemetry,
+} from "./model-telemetry.js";
 
 export type RejudgeWorkerRequest = {
   schema_version: 1;
@@ -16,7 +21,13 @@ export type RejudgeWorkerRequest = {
   output_instructions: string;
 } & ({ mode: "fresh" } | { mode: "resume"; resume_run_id: string });
 export type RejudgeWorkerResponse =
-  | { schema_version: 1; ok: true; answer: string; run_id: string }
+  | {
+      schema_version: 1;
+      ok: true;
+      answer: string;
+      run_id: string;
+      model_telemetry?: RuntimeModelTelemetry[];
+    }
   | {
       schema_version: 1;
       ok: false;
@@ -24,6 +35,7 @@ export type RejudgeWorkerResponse =
       model: string | null;
       message: string;
       provider_reason?: ProviderFailureReason;
+      model_telemetry?: RuntimeModelTelemetry[];
     };
 export const RUN_ID_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[a-z0-9]{1,8}$/;
 const record = (value: unknown): value is Record<string, unknown> =>
@@ -31,12 +43,14 @@ const record = (value: unknown): value is Record<string, unknown> =>
 const failure = (
   stage: "setup" | "panel" | "judge" | "resume" = "setup",
   model: string | null = null,
+  modelTelemetry: RuntimeModelTelemetry[] = [],
 ): RejudgeWorkerResponse => ({
   schema_version: 1,
   ok: false,
   stage,
   model,
   message: "Rejudge execution failed",
+  ...(modelTelemetry.length ? { model_telemetry: modelTelemetry } : {}),
 });
 
 function providerFailure(model: string, detail: string): ProviderFailureReason | undefined {
@@ -100,6 +114,7 @@ export function parseRejudgeResult(
   resumeRunId?: string,
   diagnostic: (text: string) => void = () => {},
 ): RejudgeWorkerResponse {
+  const modelTelemetry = extractModelTelemetry(value);
   if (
     !record(value) ||
     !Array.isArray(value.content) ||
@@ -108,7 +123,7 @@ export function parseRejudgeResult(
     value.content[0].type !== "text" ||
     typeof value.content[0].text !== "string"
   )
-    return failure();
+    return failure("setup", null, modelTelemetry);
   const text = value.content[0].text;
   if (text.startsWith("rejudge failed:")) {
     const match =
@@ -119,10 +134,14 @@ export function parseRejudgeResult(
     diagnostic(reason ?? "Rejudge execution failed");
     return match
       ? {
-          ...failure(match[1] as "panel" | "judge" | "resume", safeWorkerDiagnostic(match[2]!)),
+          ...failure(
+            match[1] as "panel" | "judge" | "resume",
+            safeWorkerDiagnostic(match[2]!),
+            modelTelemetry,
+          ),
           ...(reason ? { provider_reason: reason } : {}),
         }
-      : failure();
+      : failure("setup", null, modelTelemetry);
   }
   const lines = text.split("\n"),
     last = lines.pop()!;
@@ -138,8 +157,14 @@ export function parseRejudgeResult(
     (mode === "resume") !== last.includes(" (resumed).") ||
     (mode === "resume" && match[1] !== resumeRunId)
   )
-    return failure();
-  return { schema_version: 1, ok: true, answer: lines.join("\n"), run_id: match[1]! };
+    return failure("setup", null, modelTelemetry);
+  return {
+    schema_version: 1,
+    ok: true,
+    answer: lines.join("\n"),
+    run_id: match[1]!,
+    ...(modelTelemetry.length ? { model_telemetry: modelTelemetry } : {}),
+  };
 }
 
 async function main(): Promise<void> {
@@ -201,6 +226,15 @@ async function main(): Promise<void> {
       throw new Error("REJUDGE_CONFIG_MISMATCH");
     await assertPiConfinementContract(request.review_root);
     const tool = await loadRejudgeTool();
+    let lastTelemetry = "";
+    const onUpdate = (update: unknown) => {
+      const telemetry = extractModelTelemetry(update);
+      if (telemetry.length === 0) return;
+      const encoded = JSON.stringify(telemetry);
+      if (encoded === lastTelemetry) return;
+      lastTelemetry = encoded;
+      stderr(`${MODEL_TELEMETRY_PREFIX}${encoded}\n`);
+    };
     const result = await tool.execute(
       "ai-pr-review",
       {
@@ -209,7 +243,7 @@ async function main(): Promise<void> {
         ...(request.mode === "resume" ? { resumeRunId: request.resume_run_id } : {}),
       },
       undefined,
-      undefined,
+      onUpdate,
       { cwd: request.review_root },
     );
     response = parseRejudgeResult(
