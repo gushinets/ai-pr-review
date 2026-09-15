@@ -110,14 +110,15 @@ function parseResponse(text: string): RejudgeWorkerResponse {
 
 function stderrTelemetry(text: string): {
   telemetry: RuntimeModelTelemetry[];
-  hasDiagnostic: boolean;
+  diagnostic: string | null;
 } {
   const latest = new Map<RuntimeModelTelemetry["role"], RuntimeModelTelemetry>();
-  let hasDiagnostic = false;
+  const diagnosticLines: string[] = [];
+  let malformedTelemetry = false;
   for (const line of text.split("\n")) {
     if (!line) continue;
     if (!line.startsWith(MODEL_TELEMETRY_PREFIX)) {
-      hasDiagnostic = true;
+      diagnosticLines.push(line);
       continue;
     }
     try {
@@ -125,15 +126,22 @@ function stderrTelemetry(text: string): {
         JSON.parse(line.slice(MODEL_TELEMETRY_PREFIX.length)),
       );
       if (parsed === null) {
-        hasDiagnostic = true;
+        malformedTelemetry = true;
         continue;
       }
       for (const entry of parsed) latest.set(entry.role, entry);
     } catch {
-      hasDiagnostic = true;
+      malformedTelemetry = true;
     }
   }
-  return { telemetry: [...latest.values()], hasDiagnostic };
+  const code = diagnosticLines.join("\n").trim();
+  const diagnostic =
+    code.length === 0 && !malformedTelemetry
+      ? null
+      : isProviderFailureReason(code) || code === "PI_CONFINEMENT_CONTRACT_FAILED"
+        ? code
+        : "Rejudge worker diagnostic";
+  return { telemetry: [...latest.values()], diagnostic };
 }
 
 export function createRejudgeEngine(
@@ -263,7 +271,7 @@ export function createRejudgeEngine(
             clean();
             const observed = stderrTelemetry(stderr);
             observe(observed.telemetry);
-            if (observed.hasDiagnostic && !oversized) diagnostic("Rejudge worker diagnostic");
+            if (observed.diagnostic !== null && !oversized) diagnostic(observed.diagnostic);
             if (code !== 0 || childError || oversized || controller.signal.aborted) {
               commit(deadlineAborted ? "deadline" : externalAborted ? "cancelled" : "failed");
               reject(fail());
