@@ -5,6 +5,7 @@ import { CENTRAL_CONFIG } from "../../src/config/central-config.js";
 import { validateReviewState, type ReviewStateV1 } from "../../src/contracts/review-state.js";
 import { renderSummary } from "../../src/publishing/summary.js";
 import { createRejudgeEngine } from "../../src/review-engine/rejudge-engine.js";
+import { finalizeRuntimeModelTelemetry } from "../../src/review-engine/model-telemetry.js";
 import { parseRejudgeResult } from "../../src/review-engine/rejudge-worker.js";
 
 const runId = "2026-09-15T07-00-00-000Z-abc123";
@@ -98,8 +99,8 @@ it("accepts new per-model status/duration fields and renders them in technical d
   expect(summary).toContain("reviewer_1");
   expect(summary).toContain("Status: completed");
   expect(summary).toContain("Duration: 1m 30s");
-  expect(summary).toContain("Status: timed_out");
-  expect(summary).toContain("Status: not_started");
+  expect(summary).toContain("Status: timed&#95;out");
+  expect(summary).toContain("Status: not&#95;started");
   expect(summary).toContain("Status: cancelled");
 });
 
@@ -159,9 +160,30 @@ it("extracts only whitelisted per-model timing from Rejudge progress details", (
   );
 });
 
-it("exposes accumulated model telemetry on the engine without changing verdict semantics", () => {
+it("turns a still-running model into timed_out with partial duration at the deadline", () => {
+  expect(
+    finalizeRuntimeModelTelemetry(
+      [
+        {
+          role: "reviewer_2",
+          status: "running",
+          started_at_ms: 1_000,
+          duration_ms: null,
+        },
+      ],
+      "deadline",
+      61_000,
+    ),
+  ).toEqual([{ role: "reviewer_2", status: "timed_out", duration_ms: 60_000 }]);
+});
+
+it("exposes four not-started model slots before any review work begins", () => {
   const engine = createRejudgeEngine();
-  const getter = (engine as unknown as { modelTelemetry?: (reviewRoot: string) => unknown })
-    .modelTelemetry;
-  expect(getter).toBeTypeOf("function");
+  expect(engine.modelTelemetry).toBeTypeOf("function");
+  expect(engine.modelTelemetry!("/not-started")).toEqual([
+    { role: "reviewer_1", status: "not_started", duration_ms: null },
+    { role: "reviewer_2", status: "not_started", duration_ms: null },
+    { role: "reviewer_3", status: "not_started", duration_ms: null },
+    { role: "judge", status: "not_started", duration_ms: null },
+  ]);
 });
