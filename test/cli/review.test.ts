@@ -122,6 +122,32 @@ const linear = {
   LINEAR_CLIENT_SECRET: "linear-secret-canary",
 };
 const qwen = { QWEN_TOKEN_PLAN_API_KEY: "sk-sp-qwen-canary" };
+const notStartedModels = [
+  {
+    role: "reviewer_1",
+    model_id: "qwen-token-plan/qwen3.8-flash",
+    status: "not_started",
+    duration_ms: null,
+  },
+  {
+    role: "reviewer_2",
+    model_id: "qwen-token-plan/deepseek-v4-pro-0813",
+    status: "not_started",
+    duration_ms: null,
+  },
+  {
+    role: "reviewer_3",
+    model_id: "qwen-token-plan/glm-5.2",
+    status: "not_started",
+    duration_ms: null,
+  },
+  {
+    role: "judge",
+    model_id: "qwen-token-plan/qwen3.8-max",
+    status: "not_started",
+    duration_ms: null,
+  },
+];
 it.each(["QWEN_API_KEY", "BAILIAN_TOKEN_PLAN_API_KEY", "ALIBABA_WORKSPACE_ID"])(
   "rejects legacy %s in every review phase before network access",
   async (key) => {
@@ -150,6 +176,7 @@ it.each([undefined, "", " "])(
     expect(JSON.parse(await readFile(f.stateOut, "utf8"))).toMatchObject({
       outcome: "UNABLE_TO_REVIEW",
       unable_reason: "PROVIDER_CONFIG_INVALID",
+      telemetry: { models: notStartedModels },
     });
     expect(await readFile(f.trace, "utf8")).not.toContain("worker-safe");
   },
@@ -176,6 +203,7 @@ it("emits preflight UNABLE with no AI or Linear credentials and null review iden
     outcome: "UNABLE_TO_REVIEW",
     unable_reason: "PR_METADATA_INVALID",
     review_identity: null,
+    telemetry: { models: notStartedModels },
   });
 });
 it.each(["sk-payg-key", "sk-sp-", "sk-sp-key\n"])(
@@ -190,6 +218,7 @@ it.each(["sk-payg-key", "sk-sp-", "sk-sp-key\n"])(
     expect(JSON.parse(await readFile(f.stateOut, "utf8"))).toMatchObject({
       outcome: "UNABLE_TO_REVIEW",
       unable_reason: "PROVIDER_CONFIG_INVALID",
+      telemetry: { models: notStartedModels },
     });
   },
   20000,
