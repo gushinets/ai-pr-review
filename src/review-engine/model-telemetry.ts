@@ -87,7 +87,10 @@ export function parseRuntimeModelTelemetry(value: unknown): RuntimeModelTelemetr
   for (const raw of value) {
     if (!record(raw)) return null;
     const keys = ["role", "status", "started_at_ms", "duration_ms"];
-    if (Object.keys(raw).length !== keys.length || Object.keys(raw).some((key) => !keys.includes(key)))
+    if (
+      Object.keys(raw).length !== keys.length ||
+      Object.keys(raw).some((key) => !keys.includes(key))
+    )
       return null;
     const role = ROLE_ORDER.includes(raw.role as ModelTelemetryRole)
       ? (raw.role as ModelTelemetryRole)
@@ -129,14 +132,7 @@ export function finalizeRuntimeModelTelemetry(
       return { role: entry.role, status: entry.status, duration_ms: entry.duration_ms };
     return {
       role: entry.role,
-      status:
-        cause === "deadline"
-          ? "timed_out"
-          : cause === "cancelled"
-            ? "cancelled"
-            : cause === "completed"
-              ? "failed"
-              : "failed",
+      status: cause === "deadline" ? "timed_out" : cause === "cancelled" ? "cancelled" : "failed",
       duration_ms: Math.max(0, now - entry.started_at_ms),
     };
   });
