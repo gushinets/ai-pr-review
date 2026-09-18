@@ -27,6 +27,7 @@ export async function runCli(
         repository: { type: "string" },
         "triggering-run-id": { type: "string" },
         "pr-number": { type: "string" },
+        "expected-head-sha": { type: "string" },
         "engine-sha": { type: "string" },
         actor: { type: "string" },
       },
@@ -37,7 +38,10 @@ export async function runCli(
     if (
       !rawId ||
       !/^[1-9][0-9]*$/.test(rawId) ||
-      (mode === "automatic" && (values["pr-number"] !== undefined || values.actor !== undefined)) ||
+      (mode === "automatic" &&
+        (values["pr-number"] !== undefined ||
+          values["expected-head-sha"] !== undefined ||
+          values.actor !== undefined)) ||
       (mode === "manual" && values["triggering-run-id"] !== undefined)
     )
       return 70;
@@ -50,6 +54,9 @@ export async function runCli(
             mode,
             prNumber: Number(rawId),
             actor: values.actor ?? env.GITHUB_ACTOR ?? "",
+            ...(values["expected-head-sha"] === undefined
+              ? {}
+              : { expectedHeadSha: values["expected-head-sha"] }),
           };
     validatePreflightInput(input);
     if (!env.RUNNER_TEMP || !env.GITHUB_OUTPUT) return 70;
