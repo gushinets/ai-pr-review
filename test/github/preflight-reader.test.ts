@@ -194,7 +194,7 @@ describe("PR resolution", () => {
           prNumber: 7,
           actor: "maintainer",
           expectedHeadSha: "c".repeat(40),
-        } as any,
+        },
         reader,
       ),
     ).toEqual({ status: "STALE_SKIPPED" });
