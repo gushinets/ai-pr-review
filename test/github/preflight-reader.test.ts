@@ -184,6 +184,22 @@ describe("PR resolution", () => {
     ).toEqual({ status: "RESOLVED", pr, workflowName: null });
     expect(calls).toEqual(["pr:7"]);
   });
+  it("skips manual resolution when the PR head moved past the requested snapshot", async () => {
+    const { reader, calls } = fixture();
+    expect(
+      await resolvePullRequest(
+        {
+          mode: "manual",
+          repository: "owner/repo",
+          prNumber: 7,
+          actor: "maintainer",
+          expectedHeadSha: "c".repeat(40),
+        } as any,
+        reader,
+      ),
+    ).toEqual({ status: "STALE_SKIPPED" });
+    expect(calls).toEqual(["pr:7"]);
+  });
 });
 
 describe("Octokit adapter", () => {
