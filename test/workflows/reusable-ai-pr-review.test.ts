@@ -92,6 +92,7 @@ describe("central reusable workflow security contract", () => {
       mode: { required: true, type: "string" },
       triggering_run_id: { required: false, type: "string", default: "" },
       pr_number: { required: false, type: "number", default: 0 },
+      expected_head_sha: { required: false, type: "string", default: "" },
     });
     expect(flow.on.workflow_call!.secrets).toEqual({
       QWEN_TOKEN_PLAN_API_KEY: { required: true },
@@ -251,13 +252,19 @@ describe("central reusable workflow security contract", () => {
         MODE: "manual",
         TRIGGERING_RUN_ID: "",
         PR_NUMBER: "7",
+        EXPECTED_HEAD_SHA: "b".repeat(40),
         REPOSITORY: "owner/repo",
         ENGINE_SHA: "a",
       },
       captureNpm,
     );
     expect(manual.status).toBe(0);
-    expect(manual.args.slice(-2)).toEqual(["--pr-number", "7"]);
+    expect(manual.args.slice(-4)).toEqual([
+      "--pr-number",
+      "7",
+      "--expected-head-sha",
+      "b".repeat(40),
+    ]);
     for (const env of [
       { MODE: "bad", PR_NUMBER: "0", TRIGGERING_RUN_ID: "42" },
       { MODE: "automatic", PR_NUMBER: "7", TRIGGERING_RUN_ID: "42" },
