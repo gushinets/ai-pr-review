@@ -40,7 +40,13 @@ export interface GitHubReader {
 }
 export type PreflightTrigger =
   | { mode: "automatic"; repository: string; triggeringRunId: number }
-  | { mode: "manual"; repository: string; prNumber: number; actor: string };
+  | {
+      mode: "manual";
+      repository: string;
+      prNumber: number;
+      actor: string;
+      expectedHeadSha?: string;
+    };
 export type Resolution =
   | { status: "RESOLVED"; pr: PullRequest; workflowName: string | null }
   | { status: "NOT_APPLICABLE_SKIPPED" | "STALE_SKIPPED" };
@@ -75,6 +81,10 @@ export async function resolvePullRequest(
     pr.number !== prNumber
   )
     return { status: "NOT_APPLICABLE_SKIPPED" };
-  if (run && run.headSha !== pr.headSha) return { status: "STALE_SKIPPED" };
+  if (
+    (run && run.headSha !== pr.headSha) ||
+    (input.mode === "manual" && input.expectedHeadSha && input.expectedHeadSha !== pr.headSha)
+  )
+    return { status: "STALE_SKIPPED" };
   return { status: "RESOLVED", pr, workflowName: run?.name ?? null };
 }
