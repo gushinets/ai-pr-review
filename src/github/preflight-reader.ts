@@ -83,7 +83,9 @@ export async function resolvePullRequest(
     return { status: "NOT_APPLICABLE_SKIPPED" };
   if (
     (run && run.headSha !== pr.headSha) ||
-    (input.mode === "manual" && input.expectedHeadSha && input.expectedHeadSha !== pr.headSha)
+    (input.mode === "manual" &&
+      input.expectedHeadSha &&
+      input.expectedHeadSha.toLowerCase() !== pr.headSha.toLowerCase())
   )
     return { status: "STALE_SKIPPED" };
   return { status: "RESOLVED", pr, workflowName: run?.name ?? null };
