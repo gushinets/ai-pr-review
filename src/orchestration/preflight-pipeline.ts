@@ -57,7 +57,11 @@ export function validatePreflightInput(input: PreflightInput): void {
     id < 1 ||
     (input.mode !== "automatic" && input.mode !== "manual") ||
     (input.mode === "manual" &&
-      (!input.actor || !/^[A-Za-z0-9-]+(?:\[bot\])?$/.test(input.actor) || !safeLine(input.actor)))
+      (!input.actor ||
+        !/^[A-Za-z0-9-]+(?:\[bot\])?$/.test(input.actor) ||
+        !safeLine(input.actor) ||
+        (input.expectedHeadSha !== undefined &&
+          !/^[0-9a-fA-F]{40}$/.test(input.expectedHeadSha))))
   )
     throw new Error("Invalid preflight trigger");
 }
