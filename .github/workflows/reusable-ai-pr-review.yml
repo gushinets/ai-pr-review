@@ -13,6 +13,10 @@ on:
         required: false
         type: number
         default: 0
+      expected_head_sha:
+        required: false
+        type: string
+        default: ""
     secrets:
       QWEN_TOKEN_PLAN_API_KEY:
         required: true
@@ -61,6 +65,7 @@ jobs:
           MODE: ${{ inputs.mode }}
           TRIGGERING_RUN_ID: ${{ inputs.triggering_run_id }}
           PR_NUMBER: ${{ inputs.pr_number }}
+          EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}
           REPOSITORY: ${{ github.repository }}
           ENGINE_SHA: ${{ job.workflow_sha }}
         shell: bash
@@ -69,11 +74,15 @@ jobs:
           case "$MODE" in
             automatic)
               test "$PR_NUMBER" = 0 || exit 70
+              test -z "$EXPECTED_HEAD_SHA" || exit 70
               args+=(--triggering-run-id "$TRIGGERING_RUN_ID")
               ;;
             manual)
               test -z "$TRIGGERING_RUN_ID" || exit 70
               args+=(--pr-number "$PR_NUMBER")
+              if test -n "$EXPECTED_HEAD_SHA"; then
+                args+=(--expected-head-sha "$EXPECTED_HEAD_SHA")
+              fi
               ;;
             *) exit 70 ;;
           esac

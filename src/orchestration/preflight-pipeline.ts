@@ -52,12 +52,19 @@ export function validatePreflightInput(input: PreflightInput): void {
   )
     throw new Error("Invalid trusted preflight input");
   const id = input.mode === "automatic" ? input.triggeringRunId : input.prNumber;
+  const expectedHeadValid =
+    input.mode !== "manual" ||
+    input.expectedHeadSha === undefined ||
+    /^[0-9a-fA-F]{40}$/.test(input.expectedHeadSha);
   if (
     !Number.isSafeInteger(id) ||
     id < 1 ||
     (input.mode !== "automatic" && input.mode !== "manual") ||
     (input.mode === "manual" &&
-      (!input.actor || !/^[A-Za-z0-9-]+(?:\[bot\])?$/.test(input.actor) || !safeLine(input.actor)))
+      (!input.actor ||
+        !/^[A-Za-z0-9-]+(?:\[bot\])?$/.test(input.actor) ||
+        !safeLine(input.actor) ||
+        !expectedHeadValid))
   )
     throw new Error("Invalid preflight trigger");
 }
