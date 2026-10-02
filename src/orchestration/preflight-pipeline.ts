@@ -16,7 +16,11 @@ import {
   type PreflightTrigger,
 } from "../github/preflight-reader.js";
 
-export type PreflightInput = PreflightTrigger & { engineSha: string };
+export type PreflightInput = PreflightTrigger & {
+  engineSha: string;
+  integration?: "legacy" | "app";
+  requirementsSource?: { kind: "none" } | { kind: "linear"; identifier: string };
+};
 export interface PreflightResult {
   schema_version: 1;
   mode: "automatic" | "manual";
@@ -118,12 +122,20 @@ export async function runPreflight(
     );
     if (!["write", "maintain", "admin"].includes(permission))
       return { ...result, status: "UNAUTHORIZED_SKIPPED" };
-    const key = parsePrMetadata(pr.title, pr.body);
-    if (!key) return unable("PR_METADATA_INVALID");
+    const key =
+      input.integration === "app"
+        ? input.requirementsSource?.kind === "linear"
+          ? input.requirementsSource.identifier
+          : null
+        : parsePrMetadata(pr.title, pr.body);
+    if ((!key && input.integration !== "app") || (key !== null && !/^ANY-[1-9][0-9]*$/.test(key)))
+      return unable("PR_METADATA_INVALID");
     result.linear_issue = key;
     result.review_identity = { ...attempt, linear_issue: key };
-    const config = await loadRepoConfigAtBase(pr.baseSha, (path, sha) =>
-      reader.readContent(input.repository, path, sha),
+    const config = await loadRepoConfigAtBase(
+      pr.baseSha,
+      (path, sha) => reader.readContent(input.repository, path, sha),
+      { optional: input.integration === "app" },
     );
     if (input.mode === "automatic" && workflowName !== config.primary_ci_workflow)
       return unable("CONFIG_INVALID");

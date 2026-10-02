@@ -17,6 +17,7 @@ import type { StateDiscovery } from "../../src/state/github-artifact-store.js";
 import { buildReviewState, parseReviewState } from "../../src/state/review-state.js";
 import { type RejudgeEngine, RejudgeEngineError } from "../../src/review-engine/rejudge-engine.js";
 import { UNABLE_REASONS } from "../../src/contracts/failure-reasons.js";
+import { noRequirements } from "../../src/requirements/provider.js";
 
 const head = "a".repeat(40),
   base = "b".repeat(40),
@@ -39,6 +40,28 @@ const block: JudgeResultV1 = {
   ],
 };
 const temps: string[] = [];
+it("runs the mature pipeline with explicit absent requirements and no BASE config", async () => {
+  const f = await fixture();
+  f.preflight.linear_issue = null;
+  f.preflight.review_identity!.linear_issue = null;
+  f.github.readContent = async () => undefined;
+  const result = await runReviewPipeline(
+    { preflight: f.preflight, workDir: f.workDir, optionalConfig: true },
+    { ...f.prepare, requirementsProvider: noRequirements },
+    f.execute,
+  );
+  expect(result.kind).toBe("STATE_READY");
+  if (result.kind !== "STATE_READY") throw new Error("Missing state");
+  expect(result.state.outcome).toBe("PASS");
+  expect(result.state.review_identity?.linear_issue).toBeNull();
+  expect(f.loadRequirements).not.toHaveBeenCalled();
+  expect(parseReviewState(JSON.stringify(result.state))).toEqual(result.state);
+  expect(
+    JSON.parse(
+      await readFile(join(f.workDir, "private/review-root/requirements/linear.json"), "utf8"),
+    ).identifier,
+  ).toBeNull();
+});
 afterEach(async () => {
   vi.unstubAllEnvs();
   await Promise.all(temps.splice(0).map((p) => rm(p, { recursive: true, force: true })));

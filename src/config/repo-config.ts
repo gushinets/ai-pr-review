@@ -59,9 +59,12 @@ export function parseRepoConfig(source: string): RepoConfigV1 {
 export async function loadRepoConfigAtBase(
   baseSha: string,
   readContent: ReadRepoContent,
+  options: { optional?: boolean } = {},
 ): Promise<RepoConfigV1> {
   const source = await readContent(".github/ai-review.yml", baseSha);
   if (source === undefined) {
+    if (options.optional)
+      return { version: 1, primary_ci_workflow: "CI", policy: { always: [], scoped: [] } };
     throw new ConfigError("CONFIG_MISSING", "Repository config is missing at the base SHA");
   }
   return parseRepoConfig(source);
