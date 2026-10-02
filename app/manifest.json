@@ -1,0 +1,19 @@
+{
+  "name": "AI PR Review",
+  "url": "https://REPLACE_WITH_OPERATOR_HOMEPAGE",
+  "hook_attributes": {
+    "url": "https://REPLACE_WITH_OPERATOR_GATEWAY/webhook",
+    "active": true
+  },
+  "public": true,
+  "default_permissions": {
+    "metadata": "read",
+    "contents": "read",
+    "pull_requests": "write",
+    "issues": "read",
+    "checks": "write",
+    "statuses": "read",
+    "actions": "write"
+  },
+  "default_events": ["issue_comment"]
+}

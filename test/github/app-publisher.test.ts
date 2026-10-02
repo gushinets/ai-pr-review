@@ -6,7 +6,7 @@ it("reconciles only comments and checks owned by the configured App", async () =
   const user = { id: 1, login: "review-app[bot]", type: "Bot" };
   const octokit = new Octokit({
     request: {
-      fetch: async (input) => {
+      fetch: async (input: RequestInfo | URL) => {
         const path = new URL(String(input)).pathname;
         const data = path.endsWith("check-runs")
           ? {

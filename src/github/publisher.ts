@@ -59,7 +59,7 @@ export function createGitHubPublisher(
     app &&
     (!Number.isSafeInteger(app.appId) ||
       app.appId < 1 ||
-      !/^[A-Za-z0-9-]+\[bot\]$/.test(app.botLogin))
+      !/^[A-Za-z0-9_-]+\[bot\]$/.test(app.botLogin))
   )
     throw new Error("Invalid publisher identity");
   const isOwned = (user: { id: number; login: string; type: string } | null) =>
