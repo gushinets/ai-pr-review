@@ -53,7 +53,7 @@ it("loads target state from central artifacts and reuses it despite changed requ
   const name = centralArtifactName(identity.repository, identity.pr_number);
   const octokit = new Octokit({
     request: {
-      fetch: async (input) => {
+      fetch: async (input: RequestInfo | URL) => {
         const url = new URL(String(input));
         requests.push(url.pathname);
         if (url.pathname === "/repos/engine/service/actions/artifacts") {
