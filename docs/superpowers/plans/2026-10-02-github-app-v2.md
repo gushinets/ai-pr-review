@@ -27,18 +27,18 @@ GitHub Actions and pinned CodeGraph in a bounded Linux container.
 
 ## Tasks
 
-- [ ] 1. Amend V1 architecture before implementation; commit this spec/plan.
-- [ ] 2. Add validated `ReviewRequest`, optional BASE config and none/Linear
+- [x] 1. Amend V1 architecture before implementation; commit this spec/plan.
+- [x] 2. Add validated `ReviewRequest`, optional BASE config and none/Linear
       providers. Adapt pipeline and nullable persisted identity; test zero-config,
       invalid config, trusted BASE, no requirements and historical V1 parsing.
-- [ ] 3. Add App JWT/scoped tokens, signed webhook, durable command claims and
+- [x] 3. Add App JWT/scoped tokens, signed webhook, durable command claims and
       central dispatcher. Test auth, permission, malformed/unrelated events,
       replay, duplicates, installation errors and new HEAD.
-- [ ] 4. Separate central artifact repository/provenance and App publisher
+- [x] 4. Separate central artifact repository/provenance and App publisher
       ownership. Test cross-repo state, rerolls, history and stale/closed PRs.
-- [ ] 5. Add bounded graph runner and sanitized evidence/experiment telemetry.
+- [x] 5. Add bounded graph runner and sanitized evidence/experiment telemetry.
       Test static graph fixtures, paths, symlinks, output limits and failures.
-- [ ] 6. Wire central workflow/CLI, isolated phases, manifest/container setup.
+- [x] 6. Wire central workflow/CLI, isolated phases, manifest/container setup.
       Test workflow credential boundaries and fake lifecycle through real engine
       orchestration and publisher; retain old fixture and adversarial tests.
 - [ ] 7. Update primary README/operations/checklist. Run complete deterministic
@@ -51,3 +51,22 @@ GitHub Actions and pinned CodeGraph in a bounded Linux container.
 - Branch: `codex/github-app-v2`; clean starting checkout on main.
 - Decisions: use the supplied autonomous spec; execute inline without routine
   approval pauses. Reuse existing schema with explicit nullable Linear field.
+- Domain implementation/review agents handled App and graph independently; the
+  central adapters stayed inline. Each domain received a separate read-only review.
+- App review fixed signed-body replay via changed delivery headers, terminal-failure
+  retry claims and ineffective Octokit deadlines. Graph review fixed multibyte
+  fallback output overflow and the SDK's hidden dynamic-boundary scan cap. Domain
+  re-reviews report no remaining findings.
+- Completion happens after publication in a fresh job. Its HMAC secret is absent
+  from model/graph/publisher phases. Failed publication releases only the original
+  command claim; persisted PASS/BLOCK is still reused.
+- Both comparison arms are fresh private shadows; neither publishes. Normal
+  canonical requests select one production graph mode.
+- Linux Node 22.19.0 verification: lint, formatting, typecheck, 1,118 deterministic
+  tests and build passed. All existing adversarial filesystem tests were retained.
+  The separate real CodeGraph container fixture passed, as did the gateway image
+  build and `/healthz` smoke check using fake credentials.
+- Complete-diff independent review and remote PR CI are pending. Production
+  App registration/installation, HTTPS deployment, persistent storage and secrets
+  require operator setup; `docs/operations.md` contains the checklist and live
+  acceptance sequence. No real installed-App/model E2E is claimed.

@@ -18,6 +18,10 @@ authorizes the commenter, captures exact base/head and dispatches the central
 workflow. A durable SQLite command ledger handles delivery replay and command
 identity. Central Actions concurrency serializes reviews of each target PR;
 canonical completed PASS/BLOCK state prevents rerolls across commands/restarts.
+Signed comment IDs remain consumed independently of unsigned delivery headers.
+A purpose-separated HMAC completion callback retains completed claims or releases
+only the original claim after terminal execution/publication failure. A new comment
+can then retry; old webhook/callback replay cannot release a later claim.
 Ambiguous dispatch failures remain claimed until reconciled by an operator.
 
 ## Central execution
@@ -72,7 +76,9 @@ Graph evidence includes changed symbols, callers/callees, transitive impact,
 affected files/tests and unresolved boundaries where available. It is structural
 evidence, not an oracle; it cannot mechanically cause BLOCK. No reviewer MCP.
 Experiments run both arms at the same exact request identity, persist sanitized
-telemetry separately, and publish only the selected canonical arm. Graph status,
+telemetry separately, and preserve the production verdict: both comparison arms
+are fresh private shadows, even when completed production state exists. Ordinary
+canonical requests select one production variant. Graph status,
 model panel, finding/blocker counts, tokens (null when unavailable) and latency
 are recorded. More findings alone do not establish usefulness; evaluate against
 human findings and material regressions.
