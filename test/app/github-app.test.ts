@@ -123,6 +123,18 @@ function fixture() {
 }
 
 describe("App JWT and scoped installation credentials", () => {
+  it("resolves internal requests through the authenticated repository installation", async () => {
+    const f = fixture();
+    expect(
+      await mintInstallationToken(credentials, undefined, "owner/repo", "read", f.options),
+    ).toBe(f.token);
+    expect(f.calls.map((call) => call.path)).toEqual([
+      "/repos/owner/repo/installation",
+      "/app/installations/17/access_tokens",
+      "/installation/repositories",
+    ]);
+    expect(f.calls[1]?.body).toEqual({ repositories: ["repo"], permissions: readPermissions });
+  });
   it("aborts an unresponsive GitHub fetch with the configured request deadline", async () => {
     vi.spyOn(AbortSignal, "timeout").mockImplementation((milliseconds) => {
       expect(milliseconds).toBe(15_000);

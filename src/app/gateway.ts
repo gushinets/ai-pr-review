@@ -72,7 +72,7 @@ export async function handleWebhook(
   )
     return { status: "INVALID_SIGNATURE" };
   if (input.event !== "issue_comment") return { status: "IGNORED" };
-  if (!/^[A-Za-z0-9_-]{1,128}$/.test(input.delivery)) return { status: "INVALID_PAYLOAD" };
+  if (!/^[A-Za-z0-9-]{1,100}$/.test(input.delivery)) return { status: "INVALID_PAYLOAD" };
   let payload: Record<string, unknown> | undefined;
   try {
     payload = object(JSON.parse(input.body.toString("utf8")));

@@ -23,6 +23,8 @@ it("dispatches centrally and keeps model, App and publication credentials in sep
   expect(Object.keys(graph.env)).not.toContain("QWEN_TOKEN_PLAN_API_KEY");
   expect(JSON.stringify(workflow.jobs.publisher)).not.toContain("QWEN_TOKEN_PLAN_API_KEY");
   expect(JSON.stringify(workflow.jobs.publisher)).not.toContain("LINEAR_CLIENT_SECRET");
+  expect(workflow.jobs.completion.if).toContain("trigger.kind == 'app'");
+  expect(workflow.jobs.completion.if).toContain("trigger.kind == 'app'");
   expect(raw).not.toContain("secrets: inherit");
   expect(raw).not.toMatch(/run:.*\$\{\{.*(?:request|repository|headSha)/);
 });

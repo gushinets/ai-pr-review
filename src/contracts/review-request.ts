@@ -24,7 +24,7 @@ export const ReviewRequestSchema = Type.Object(
   {
     schema_version: Type.Literal(2),
     repository: Type.String({
-      pattern: "^[A-Za-z0-9_-][A-Za-z0-9_.-]*/[A-Za-z0-9_-][A-Za-z0-9_.-]*$",
+      pattern: "^[A-Za-z0-9_-][A-Za-z0-9_.-]*/[A-Za-z0-9_.-]+$",
       maxLength: 200,
     }),
     prNumber: id,
@@ -72,6 +72,7 @@ export function parseReviewRequest(source: string): ReviewRequest {
           : []),
       ].every(Number.isSafeInteger) ||
       /[\p{Cc}\p{Cf}]/u.test(request.baseBranch) ||
+      [".", ".."].includes(request.repository.split("/")[1]!) ||
       (request.execution === "shadow" && !request.experimentId)
     )
       throw new Error();

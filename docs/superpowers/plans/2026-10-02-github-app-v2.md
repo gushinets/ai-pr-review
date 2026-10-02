@@ -41,9 +41,9 @@ GitHub Actions and pinned CodeGraph in a bounded Linux container.
 - [x] 6. Wire central workflow/CLI, isolated phases, manifest/container setup.
       Test workflow credential boundaries and fake lifecycle through real engine
       orchestration and publisher; retain old fixture and adversarial tests.
-- [ ] 7. Update primary README/operations/checklist. Run complete deterministic
+- [x] 7. Update primary README/operations/checklist. Run complete deterministic
       checks/build; fresh independent diff review, fix findings, rerun/review.
-- [ ] 8. Commit all implementation, push/open PR if authorized access permits;
+- [x] 8. Commit all implementation, push/open PR if authorized access permits;
       do not merge. Report genuine owner setup requirements and verification.
 
 ## Execution ledger
@@ -62,11 +62,16 @@ GitHub Actions and pinned CodeGraph in a bounded Linux container.
   command claim; persisted PASS/BLOCK is still reused.
 - Both comparison arms are fresh private shadows; neither publishes. Normal
   canonical requests select one production graph mode.
-- Linux Node 22.19.0 verification: lint, formatting, typecheck, 1,118 deterministic
+- Linux Node 22.19.0 verification after final fixes: `npm run check`, 1,126 deterministic
   tests and build passed. All existing adversarial filesystem tests were retained.
   The separate real CodeGraph container fixture passed, as did the gateway image
   build and `/healthz` smoke check using fake credentials.
-- Complete-diff independent review and remote PR CI are pending. Production
+- Complete-diff independent review found three request-boundary issues: valid
+  dot-prefixed repository names, gateway/central delivery validation mismatch and
+  internal token/callback routing. Regression tests reproduced each failure; all
+  were fixed. A focused re-review reports no remaining material findings.
+- PR: https://github.com/gushinets/ai-pr-review/pull/7. The initial GitHub CI passed;
+  final-head CI is tracked on the PR. The PR is not merged. Production
   App registration/installation, HTTPS deployment, persistent storage and secrets
   require operator setup; `docs/operations.md` contains the checklist and live
   acceptance sequence. No real installed-App/model E2E is claimed.

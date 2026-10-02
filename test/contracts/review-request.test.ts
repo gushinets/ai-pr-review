@@ -22,8 +22,14 @@ export const request = {
 it("accepts an exact transport independent request", () => {
   expect(parseReviewRequest(JSON.stringify(request))).toEqual(request);
 });
+it("accepts GitHub's dot-prefixed repository names", () => {
+  expect(
+    parseReviewRequest(JSON.stringify({ ...request, repository: "owner/.github" })).repository,
+  ).toBe("owner/.github");
+});
 it.each([
   { ...request, repository: "../repo" },
+  { ...request, repository: "owner/.." },
   { ...request, headSha: "moving-branch" },
   { ...request, trigger: { ...request.trigger, installationId: 0 } },
   { ...request, extra: "ignored" },

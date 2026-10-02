@@ -75,6 +75,18 @@ function fixture() {
 }
 
 describe("signed App command gateway", () => {
+  it.each(["delivery_with_underscore", "a".repeat(101)])(
+    "rejects delivery %s before consuming the signed comment",
+    async (delivery) => {
+      const f = fixture();
+      expect(await handleWebhook(f.input(f.payload, delivery), f.deps)).toEqual({
+        status: "INVALID_PAYLOAD",
+      });
+      expect(f.deps.ledger.hasComment("owner/repo", f.payload.comment.id)).toBe(false);
+      expect(f.requests).toHaveLength(0);
+      expect(await handleWebhook(f.input(), f.deps)).toEqual({ status: "DISPATCHED" });
+    },
+  );
   it("captures GitHub base/head, uses comment author and sends one zero-config request", async () => {
     const f = fixture();
     expect(await handleWebhook(f.input(), f.deps)).toEqual({ status: "DISPATCHED" });

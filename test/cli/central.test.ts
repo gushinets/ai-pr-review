@@ -3,11 +3,59 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { runCentralCli } from "../../src/cli/central.js";
+import * as appAuth from "../../src/app/github-app.js";
 
 const temps: string[] = [];
+const internalRequest = {
+  schema_version: 2,
+  repository: "owner/repo",
+  prNumber: 7,
+  baseSha: "b".repeat(40),
+  headSha: "a".repeat(40),
+  baseBranch: "main",
+  trigger: { kind: "internal", actor: "owner" },
+  requirementsSource: { kind: "none" },
+  graphMode: "off",
+  execution: "canonical",
+};
 afterEach(async () => {
   vi.restoreAllMocks();
   await Promise.all(temps.splice(0).map((path) => rm(path, { recursive: true, force: true })));
+});
+it.each(["token-read", "token-publish"])(
+  "mints repository-scoped %s for a trusted internal request",
+  async (phase) => {
+    const directory = await mkdtemp(join(tmpdir(), "central-internal-"));
+    temps.push(directory);
+    const mint = vi.spyOn(appAuth, "mintInstallationToken").mockResolvedValue("fake-read-token");
+    vi.spyOn(appAuth, "getAppIdentity").mockResolvedValue({
+      id: 1,
+      slug: "review",
+      botLogin: "review[bot]",
+    });
+    expect(
+      await runCentralCli([phase], {
+        REVIEW_REQUEST: JSON.stringify(internalRequest),
+        GITHUB_APP_ID: "1",
+        GITHUB_APP_PRIVATE_KEY: "fake-key",
+        GITHUB_OUTPUT: join(directory, "output"),
+      }),
+    ).toBe(0);
+    expect(mint).toHaveBeenCalledWith(
+      { appId: "1", privateKey: "fake-key" },
+      undefined,
+      "owner/repo",
+      phase === "token-read" ? "read" : "publish",
+    );
+    expect(await readFile(join(directory, "output"), "utf8")).toContain("token=fake-read-token");
+  },
+);
+it("internal requests require no gateway callback or completion secret", async () => {
+  const fetch = vi.spyOn(globalThis, "fetch");
+  expect(
+    await runCentralCli(["complete"], { REVIEW_REQUEST: JSON.stringify(internalRequest) }),
+  ).toBe(0);
+  expect(fetch).not.toHaveBeenCalled();
 });
 it("publication failure releases a claim despite canonical upload, without discarding state", async () => {
   const directory = await mkdtemp(join(tmpdir(), "central-complete-"));

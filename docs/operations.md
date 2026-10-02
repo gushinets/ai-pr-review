@@ -135,6 +135,23 @@ graph status. Private requirements, raw sessions and CI logs are never uploaded.
 Compare with known human findings/material regressions; extra findings do not
 prove usefulness. An ordinary canonical request selects one production variant.
 
+For a trusted operator experiment, save a `ReviewRequest` JSON with
+`trigger: {kind: "internal", actor: "YOUR_GITHUB_LOGIN"}`, the target repository,
+PR number and exact current base/head/baseBranch from GitHub. Set
+`schema_version: 2`, `requirementsSource: {kind: "none"}`, `graphMode: "off"`
+and `execution: "canonical"`; then dispatch both shadows:
+
+```bash
+gh workflow run central-ai-pr-review.yml --repo gushinets/ai-pr-review \
+  --ref main --field request="$(cat request.json)" --field compare=true
+```
+
+Use the actual protected default branch if different. The workflow resolves the
+target's installation through authenticated GitHub APIs and rechecks the actor's
+write access and exact base/head. Internal requests do not create gateway claims
+or completion callbacks. Set `requirementsSource` to the explicit Linear provider
+when testing that evidence; credentials still come only from central secrets.
+
 ### Live acceptance evidence to collect
 
 Run `test/promotion/app-e2e.test.ts` for the deterministic fake lifecycle first.

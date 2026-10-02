@@ -179,7 +179,7 @@ export async function runCentralCli(
       return 70;
     const request = centralRequest(env);
     if (phase === "complete") {
-      if (request.execution === "shadow") return 0;
+      if (request.execution === "shadow" || request.trigger.kind === "internal") return 0;
       if (
         request.trigger.kind !== "app" ||
         !env.AI_REVIEW_COMPLETION_SECRET ||
@@ -225,14 +225,13 @@ export async function runCentralCli(
       return 0;
     }
     if (phase === "token-read" || phase === "token-publish") {
-      if (request.trigger.kind !== "app") return 70;
       const credentials = {
         appId: env.GITHUB_APP_ID ?? "",
         privateKey: env.GITHUB_APP_PRIVATE_KEY ?? "",
       };
       const token = await mintInstallationToken(
         credentials,
-        request.trigger.installationId,
+        request.trigger.kind === "app" ? request.trigger.installationId : undefined,
         request.repository,
         phase === "token-read" ? "read" : "publish",
       );

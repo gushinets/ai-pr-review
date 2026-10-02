@@ -180,12 +180,15 @@ async function mint(
 /** App JWT lookup, one repository, explicit phase rights, verified effective scope. */
 export async function mintInstallationToken(
   credentials: AppCredentials,
-  installationId: number,
+  installationId: number | undefined,
   repository: string,
   phase: Phase,
   options: AppClientOptions = {},
 ): Promise<string> {
-  if (!Number.isSafeInteger(installationId) || installationId <= 0)
+  if (
+    installationId !== undefined &&
+    (!Number.isSafeInteger(installationId) || installationId <= 0)
+  )
     throw new Error("INSTALLATION_REJECTED");
   return mint(
     await installation(credentials, repository, options, installationId),
