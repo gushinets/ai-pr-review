@@ -5,7 +5,7 @@ import { unzipSync } from "fflate";
 import { validateReviewIdentity, type ReviewIdentityV1 } from "../contracts/review-identity.js";
 import type { ReviewStateV1 } from "../contracts/review-state.js";
 import { retryRead } from "../github/github-client.js";
-import { artifactName, STATE_FILE_NAME } from "./artifact-name.js";
+import { artifactName, centralArtifactName, STATE_FILE_NAME } from "./artifact-name.js";
 import { parseReviewState } from "./review-state.js";
 
 const CENTRAL_WORKFLOW = "gushinets/ai-pr-review/.github/workflows/reusable-ai-pr-review.yml";
@@ -154,6 +154,19 @@ function parseZip(bytes: Uint8Array): ReviewStateV1 {
 }
 
 type WorkflowRun = Awaited<ReturnType<Octokit["rest"]["actions"]["getWorkflowRun"]>>["data"];
+export function trustedCentralWorkflowPin(
+  run: WorkflowRun,
+  repository: string,
+  defaultBranch: string,
+): string | null {
+  return run.repository.full_name === repository &&
+    run.path === ".github/workflows/central-ai-pr-review.yml" &&
+    run.event === "workflow_dispatch" &&
+    run.head_branch === defaultBranch &&
+    /^[0-9a-f]{40}$/.test(run.head_sha)
+    ? run.head_sha
+    : null;
+}
 
 export function trustedWorkflowPin(
   run: WorkflowRun,
@@ -205,7 +218,7 @@ export class GitHubArtifactStateStore {
   // defaultBranch comes from trusted GitHub repository metadata, never PR configuration.
   constructor(
     private readonly octokit: Octokit,
-    private readonly trusted: { defaultBranch: string },
+    private readonly trusted: { defaultBranch: string; stateRepository?: string },
   ) {}
 
   async load(identity: ReviewIdentityV1, baseBranch: string): Promise<StateDiscovery> {
@@ -217,8 +230,13 @@ export class GitHubArtifactStateStore {
         !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(identity.repository)
       )
         throw new Error("STATE_LOAD_FAILED");
-      const [owner, repo] = identity.repository.split("/") as [string, string];
-      const name = artifactName(identity.pr_number);
+      const stateRepository = this.trusted.stateRepository ?? identity.repository;
+      if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(stateRepository))
+        throw new Error("STATE_LOAD_FAILED");
+      const [owner, repo] = stateRepository.split("/") as [string, string];
+      const name = this.trusted.stateRepository
+        ? centralArtifactName(identity.repository, identity.pr_number)
+        : artifactName(identity.pr_number);
       const artifacts: Artifact[] = [];
       let total: number | undefined;
       for (let page = 1; ; page++) {
@@ -271,11 +289,13 @@ export class GitHubArtifactStateStore {
             }),
           );
           if (run.id !== runId) continue;
-          const pin = trustedWorkflowPin(run, identity.repository, this.trusted.defaultBranch);
+          const pin = this.trusted.stateRepository
+            ? trustedCentralWorkflowPin(run, stateRepository, this.trusted.defaultBranch)
+            : trustedWorkflowPin(run, identity.repository, this.trusted.defaultBranch);
           if (pin === null) continue;
           const loaded = await readCanonicalArtifact(
             this.octokit,
-            identity.repository,
+            stateRepository,
             artifact.id,
             pin,
           );
@@ -291,12 +311,12 @@ export class GitHubArtifactStateStore {
           saved.repository !== identity.repository ||
           saved.pr_number !== identity.pr_number ||
           state.lineage.base_branch !== baseBranch ||
-          state.lineage.linear_issue !== identity.linear_issue
+          (!this.trusted.stateRepository && state.lineage.linear_issue !== identity.linear_issue)
         )
           continue;
-        const same = (Object.keys(identity) as (keyof ReviewIdentityV1)[]).every(
-          (key) => saved[key] === identity[key],
-        );
+        const same = (Object.keys(identity) as (keyof ReviewIdentityV1)[])
+          .filter((key) => !this.trusted.stateRepository || key !== "linear_issue")
+          .every((key) => saved[key] === identity[key]);
         if (state.outcome !== "UNABLE_TO_REVIEW") {
           if (same) return { kind: "reuse", state };
           previous ??= state;

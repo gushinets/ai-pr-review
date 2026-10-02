@@ -22,6 +22,10 @@ export interface InlineComment {
 }
 export interface GitHubPublisher {
   getHead(repository: string, prNumber: number): Promise<string>;
+  getCurrentIdentity?: (
+    repository: string,
+    prNumber: number,
+  ) => Promise<{ baseSha: string; headSha: string; state: string }>;
   listChecks(repository: string, headSha: string): Promise<PublishedCheck[]>;
   listSummaries(repository: string, prNumber: number): Promise<PublishedComment[]>;
   listInline(repository: string, prNumber: number): Promise<PublishedInline[]>;
@@ -47,8 +51,30 @@ function owned(user: { id: number; login: string; type: string } | null): boolea
 
 // Reads retry per page; writes are deliberately single-shot. The pipeline retries
 // reconciliation (discovery + fresh-head barrier + write), never a blind POST.
-export function createGitHubPublisher(octokit: Octokit): GitHubPublisher {
+export function createGitHubPublisher(
+  octokit: Octokit,
+  app?: { appId: number; botLogin: string },
+): GitHubPublisher {
+  if (
+    app &&
+    (!Number.isSafeInteger(app.appId) ||
+      app.appId < 1 ||
+      !/^[A-Za-z0-9-]+\[bot\]$/.test(app.botLogin))
+  )
+    throw new Error("Invalid publisher identity");
+  const isOwned = (user: { id: number; login: string; type: string } | null) =>
+    app ? user?.type === "Bot" && user.login === app.botLogin : owned(user);
   return {
+    ...(app
+      ? {
+          async getCurrentIdentity(repository: string, prNumber: number) {
+            const { data } = await retryRead(() =>
+              octokit.rest.pulls.get({ ...repoParams(repository), pull_number: prNumber }),
+            );
+            return { baseSha: data.base.sha, headSha: data.head.sha, state: data.state };
+          },
+        }
+      : {}),
     async getHead(repository, prNumber) {
       const { data } = await retryRead(() =>
         octokit.rest.pulls.get({ ...repoParams(repository), pull_number: prNumber }),
@@ -80,7 +106,11 @@ export function createGitHubPublisher(octokit: Octokit): GitHubPublisher {
         total = data.total_count;
         checks.push(
           ...data.check_runs
-            .filter((check) => check.app?.id === 15368 && check.app.slug === "github-actions")
+            .filter((check) =>
+              app
+                ? check.app?.id === app.appId
+                : check.app?.id === 15368 && check.app.slug === "github-actions",
+            )
             .map((check) => ({
               id: check.id,
               name: check.name,
@@ -104,7 +134,7 @@ export function createGitHubPublisher(octokit: Octokit): GitHubPublisher {
         );
         comments.push(
           ...data
-            .filter((comment) => owned(comment.user))
+            .filter((comment) => isOwned(comment.user))
             .map((comment) => ({ id: comment.id, body: comment.body ?? "" })),
         );
         if (data.length < 100) return comments;
@@ -123,7 +153,7 @@ export function createGitHubPublisher(octokit: Octokit): GitHubPublisher {
         );
         comments.push(
           ...data
-            .filter((comment) => owned(comment.user))
+            .filter((comment) => isOwned(comment.user))
             .map((comment) => ({
               id: comment.id,
               body: comment.body,

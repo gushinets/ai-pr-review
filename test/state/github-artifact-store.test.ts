@@ -6,7 +6,11 @@ import type { ReviewIdentityV1 } from "../../src/contracts/review-identity.js";
 import type { ReviewStateV1 } from "../../src/contracts/review-state.js";
 import { buildDiffIndex } from "../../src/github/diff.js";
 import { buildReviewState } from "../../src/state/review-state.js";
-import { GitHubArtifactStateStore } from "../../src/state/github-artifact-store.js";
+import {
+  GitHubArtifactStateStore,
+  trustedCentralWorkflowPin,
+} from "../../src/state/github-artifact-store.js";
+import { centralArtifactName } from "../../src/state/artifact-name.js";
 
 const identity: ReviewIdentityV1 = {
   repository: "o/r",
@@ -17,6 +21,66 @@ const identity: ReviewIdentityV1 = {
   linear_issue: "ANY-17",
 };
 const central = "gushinets/ai-pr-review/.github/workflows/reusable-ai-pr-review.yml";
+it("trusts only the central protected-default-branch dispatch workflow", () => {
+  const value = {
+    ...run(1),
+    repository: { full_name: "engine/service" },
+    path: ".github/workflows/central-ai-pr-review.yml",
+    event: "workflow_dispatch",
+    head_sha: identity.engine_sha,
+  };
+  expect(trustedCentralWorkflowPin(value as never, "engine/service", "main")).toBe(
+    identity.engine_sha,
+  );
+  for (const change of [
+    { event: "pull_request" },
+    { head_branch: "untrusted" },
+    { path: ".github/workflows/other.yml" },
+    { repository: { full_name: "o/r" } },
+  ])
+    expect(
+      trustedCentralWorkflowPin({ ...value, ...change } as never, "engine/service", "main"),
+    ).toBeNull();
+});
+it("names canonical central artifacts by target repository as well as PR", () => {
+  expect(centralArtifactName("o/r", 17)).not.toBe(centralArtifactName("other/r", 17));
+  expect(centralArtifactName("O/R", 17)).toBe(centralArtifactName("o/r", 17));
+  expect(centralArtifactName("o/r", 17)).not.toMatch(/experiment/);
+});
+it("loads target state from central artifacts and reuses it despite changed requirements metadata", async () => {
+  const requests: string[] = [];
+  const engineRepo = "engine/service";
+  const name = centralArtifactName(identity.repository, identity.pr_number);
+  const octokit = new Octokit({
+    request: {
+      fetch: async (input) => {
+        const url = new URL(String(input));
+        requests.push(url.pathname);
+        if (url.pathname === "/repos/engine/service/actions/artifacts") {
+          expect(url.searchParams.get("name")).toBe(name);
+          return json({ total_count: 1, artifacts: [{ ...artifact(1), name }] });
+        }
+        if (url.pathname === "/repos/engine/service/actions/runs/1")
+          return json({
+            ...run(1),
+            repository: { full_name: engineRepo },
+            event: "workflow_dispatch",
+            path: ".github/workflows/central-ai-pr-review.yml",
+            head_sha: identity.engine_sha,
+          });
+        if (url.pathname === "/repos/engine/service/actions/artifacts/1/zip")
+          return new Response(archive(), { headers: { "content-type": "application/zip" } });
+        throw new Error("Unexpected target state access");
+      },
+    },
+  });
+  const result = await new GitHubArtifactStateStore(octokit, {
+    defaultBranch: "main",
+    stateRepository: engineRepo,
+  }).load({ ...identity, linear_issue: null }, "main");
+  expect(result.kind).toBe("reuse");
+  expect(requests.every((path) => path.startsWith("/repos/engine/service/"))).toBe(true);
+});
 function state(
   change: Partial<ReviewIdentityV1> = {},
   outcome: ReviewStateV1["outcome"] = "PASS",
