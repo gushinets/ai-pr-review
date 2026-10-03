@@ -154,13 +154,43 @@ function parseZip(bytes: Uint8Array): ReviewStateV1 {
 }
 
 type WorkflowRun = Awaited<ReturnType<Octokit["rest"]["actions"]["getWorkflowRun"]>>["data"];
+const DEFAULT_CENTRAL_WORKFLOW_PATH = ".github/workflows/central-ai-pr-review.yml";
+const workflowPathPattern = /^\.github\/workflows\/[A-Za-z0-9_.-]+\.ya?ml$/;
+export class StateWorkflowConflictError extends Error {
+  constructor() {
+    super("STATE_LOAD_FAILED");
+    this.name = "StateWorkflowConflictError";
+  }
+}
+
+/** Resolve deployment identity from GitHub's runner context, never request JSON. */
+export function centralWorkflowPath(
+  workflowRef: string,
+  repository: string,
+  defaultBranch: string,
+): string {
+  const prefix = `${repository}/`,
+    suffix = `@refs/heads/${defaultBranch}`;
+  const path = workflowRef.slice(prefix.length, -suffix.length);
+  if (
+    !repository ||
+    !defaultBranch ||
+    !workflowRef.startsWith(prefix) ||
+    !workflowRef.endsWith(suffix) ||
+    !workflowPathPattern.test(path)
+  )
+    throw new Error("STATE_LOAD_FAILED");
+  return path;
+}
 export function trustedCentralWorkflowPin(
   run: WorkflowRun,
   repository: string,
   defaultBranch: string,
+  workflowPath = DEFAULT_CENTRAL_WORKFLOW_PATH,
 ): string | null {
   return run.repository.full_name === repository &&
-    run.path === ".github/workflows/central-ai-pr-review.yml" &&
+    workflowPathPattern.test(workflowPath) &&
+    run.path === workflowPath &&
     run.event === "workflow_dispatch" &&
     run.head_branch === defaultBranch &&
     /^[0-9a-f]{40}$/.test(run.head_sha)
@@ -218,7 +248,11 @@ export class GitHubArtifactStateStore {
   // defaultBranch comes from trusted GitHub repository metadata, never PR configuration.
   constructor(
     private readonly octokit: Octokit,
-    private readonly trusted: { defaultBranch: string; stateRepository?: string },
+    private readonly trusted: {
+      defaultBranch: string;
+      stateRepository?: string;
+      workflowPath?: string;
+    },
   ) {}
 
   async load(identity: ReviewIdentityV1, baseBranch: string): Promise<StateDiscovery> {
@@ -227,7 +261,9 @@ export class GitHubArtifactStateStore {
         !validateReviewIdentity(identity).ok ||
         !baseBranch ||
         !this.trusted.defaultBranch ||
-        !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(identity.repository)
+        !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(identity.repository) ||
+        (this.trusted.stateRepository !== undefined &&
+          !workflowPathPattern.test(this.trusted.workflowPath ?? DEFAULT_CENTRAL_WORKFLOW_PATH))
       )
         throw new Error("STATE_LOAD_FAILED");
       const stateRepository = this.trusted.stateRepository ?? identity.repository;
@@ -289,8 +325,25 @@ export class GitHubArtifactStateStore {
             }),
           );
           if (run.id !== runId) continue;
+          if (
+            this.trusted.stateRepository &&
+            run.path !== (this.trusted.workflowPath ?? DEFAULT_CENTRAL_WORKFLOW_PATH) &&
+            trustedCentralWorkflowPin(
+              run,
+              stateRepository,
+              this.trusted.defaultBranch,
+              run.path,
+            ) !== null
+          )
+            // A workflow rename must not hide a paid verdict or its blocker history.
+            throw new StateWorkflowConflictError();
           const pin = this.trusted.stateRepository
-            ? trustedCentralWorkflowPin(run, stateRepository, this.trusted.defaultBranch)
+            ? trustedCentralWorkflowPin(
+                run,
+                stateRepository,
+                this.trusted.defaultBranch,
+                this.trusted.workflowPath,
+              )
             : trustedWorkflowPin(run, identity.repository, this.trusted.defaultBranch);
           if (pin === null) continue;
           const loaded = await readCanonicalArtifact(
@@ -324,7 +377,8 @@ export class GitHubArtifactStateStore {
         } else if (same) rerunnable ??= state;
       }
       return { kind: "fresh", previous, history, rerunnable };
-    } catch {
+    } catch (error) {
+      if (error instanceof StateWorkflowConflictError) throw error;
       // A retained trusted artifact might be the current verdict; never silently reroll it.
       throw new Error("STATE_LOAD_FAILED");
     }

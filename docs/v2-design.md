@@ -62,7 +62,12 @@ data. Source-derived sanitized evidence still requires private storage.
 
 Canonical state lives in the execution repository. Artifact names include a
 target-repository digest and PR; trusted workflow provenance is checked against
-the central default branch and run engine SHA. Target identity and state
+the central default branch and run engine SHA. Provenance also binds the workflow
+path derived from GitHub's trusted runner context, including custom workflow
+filenames. Retained artifacts from another otherwise valid central dispatch
+workflow fail closed without producing a new canonical artifact instead of
+silently rerolling a verdict or losing blockers.
+Target identity and state
 repository are separate. Comments are presentation only. Compatible historical
 blockers, same-head reuse and both stale-head barriers remain mandatory.
 

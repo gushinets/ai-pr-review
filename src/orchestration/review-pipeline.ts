@@ -76,7 +76,7 @@ import {
 } from "../review-engine/resolution-result.js";
 import { computeFreshVerdict, computeFinalVerdict } from "../review-engine/verdict.js";
 import { assertRealpathContained } from "../sandbox/path-containment.js";
-import type { StateDiscovery } from "../state/github-artifact-store.js";
+import { StateWorkflowConflictError, type StateDiscovery } from "../state/github-artifact-store.js";
 import {
   buildReviewState,
   parseReviewState,
@@ -463,6 +463,8 @@ export async function prepareReview(
     });
     return { kind: "PREPARED" };
   } catch (error) {
+    // Do not persist an alternate producer's failure artifact and obstruct recovery.
+    if (error instanceof StateWorkflowConflictError) throw error;
     if (error instanceof StalePrDiffError) return { kind: "STALE_SKIPPED" };
     state.unable_reason = failureReason(error, stage);
     return finish(input, dependencies.github, state, privacy);

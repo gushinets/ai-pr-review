@@ -34,6 +34,9 @@ async function environment() {
     EXECUTION_REPOSITORY_PRIVATE: "true",
     STATE_READ_TOKEN: "central-read-canary",
     STATE_REPOSITORY: "operator/private-execution",
+    STATE_DEFAULT_BRANCH: "main",
+    GITHUB_WORKFLOW_REF:
+      "operator/private-execution/.github/workflows/central-ai-pr-review.yml@refs/heads/main",
   };
 }
 it.each(["false", "", undefined])(
@@ -78,6 +81,32 @@ it.each([
   expect(getPullRequest).not.toHaveBeenCalled();
   expect(loadState).not.toHaveBeenCalled();
   await expect(readFile(join(env.RUNNER_TEMP, "ai-pr-review/input.json"))).rejects.toThrow();
+  await expect(readFile(env.GITHUB_OUTPUT)).rejects.toThrow();
+});
+it.each([
+  undefined,
+  "wrong/repository/.github/workflows/custom.yml@refs/heads/main",
+  "operator/private-execution/.github/workflows/custom.yml@refs/heads/other",
+  "operator/private-execution/.github/workflows/custom.yml@refs/tags/main",
+  "operator/private-execution/.github/workflows/../custom.yml@refs/heads/main",
+  "operator/private-execution/.github/workflows/custom.txt@refs/heads/main",
+])("rejects invalid workflow provenance %s before target access", async (workflowRef) => {
+  const env = await environment();
+  vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    new Response(
+      JSON.stringify({ full_name: env.STATE_REPOSITORY, private: true, visibility: "private" }),
+      { headers: { "content-type": "application/json" } },
+    ),
+  );
+  const getPullRequest = vi.fn();
+  expect(
+    await runCentralCli(
+      ["prepare"],
+      { ...env, GITHUB_WORKFLOW_REF: workflowRef },
+      { github: { getPullRequest } as unknown as GithubReadClient },
+    ),
+  ).toBe(70);
+  expect(getPullRequest).not.toHaveBeenCalled();
   await expect(readFile(env.GITHUB_OUTPUT)).rejects.toThrow();
 });
 it("rechecks visibility before canonical or shadow artifact upload", async () => {

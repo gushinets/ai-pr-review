@@ -26,7 +26,11 @@ import {
   assertRealpathContained,
 } from "../sandbox/path-containment.js";
 import { centralArtifactName, STATE_FILE_NAME } from "../state/artifact-name.js";
-import { GitHubArtifactStateStore, type StateDiscovery } from "../state/github-artifact-store.js";
+import {
+  centralWorkflowPath,
+  GitHubArtifactStateStore,
+  type StateDiscovery,
+} from "../state/github-artifact-store.js";
 import { parseReviewState } from "../state/review-state.js";
 
 type Phase =
@@ -281,6 +285,11 @@ export async function runCentralCli(
         ? undefined
         : (dependencies.github ?? createGitHubClient(transport(env.TARGET_READ_TOKEN)));
     if (phase === "prepare") {
+      const workflowPath = centralWorkflowPath(
+        env.GITHUB_WORKFLOW_REF ?? "",
+        env.STATE_REPOSITORY ?? "",
+        env.STATE_DEFAULT_BRANCH ?? "",
+      );
       const input = await resolveReviewRequest(request, env.ENGINE_SHA!, workDir, github!);
       await writeOwned(workDir, "input.json", input);
       await writeOwned(workDir, "request.json", request);
@@ -295,6 +304,7 @@ export async function runCentralCli(
         : new GitHubArtifactStateStore(transport(env.STATE_READ_TOKEN), {
             defaultBranch: env.STATE_DEFAULT_BRANCH ?? "",
             stateRepository: env.STATE_REPOSITORY ?? "",
+            workflowPath,
           });
       const store = dependencies.loadState ?? stateStore!.load.bind(stateStore);
       const result = await prepareReview(input, {

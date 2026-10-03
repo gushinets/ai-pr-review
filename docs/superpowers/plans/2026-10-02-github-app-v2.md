@@ -125,3 +125,24 @@ GitHub Actions and pinned CodeGraph in a bounded Linux container.
 - [x] Add regressions, run full Linux checks/build and restricted graph fixture,
       rebuild/start gateway, independently review the complete diff, push scoped
       fixes and resolve the two new review threads with evidence. Do not merge.
+
+## Additional review at 9c0ca1e
+
+- [x] Reproduce custom-workflow canonical-state rejection, retain the supported
+      deployment filename, and derive the trusted artifact path from GitHub's
+      runner context. Preserve repository/branch/event/engine provenance checks,
+      same-engine verdict reuse and previous blocker history.
+- [x] Reproduce the independent review's workflow-switch reroll/history gap and
+      fail closed on retained artifacts from another valid central producer.
+      Keep exact producer provenance and document recovery through the original
+      deployment path, including across engine upgrades.
+- [x] Preserve the deployment-conflict error through preparation so the failed
+      attempt uploads no alternate canonical state. Verify original-path recovery
+      reuses the retained BLOCK without another model call.
+- [x] Run fresh Linux Node 22.19.0 checks/build: 1,262 tests pass. The real
+      restricted graph fixture passes; the rebuilt gateway starts and returns
+      200 OK on `/healthz`. Independent review of the complete diff is clean
+      and independently passes 424 tests across 19 files.
+
+Push the fix to PR #7 and record the verification evidence in its description and
+review thread. Resolve the thread only after verification; do not merge.

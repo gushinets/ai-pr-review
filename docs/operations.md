@@ -134,6 +134,19 @@ Canonical artifacts live in the execution repository, named
 `ai-review-state-v1.json` and are retained for 90 days. Discovery verifies the
 central workflow, default branch, dispatch event, run engine SHA and target
 identity. Target artifacts and PR comments cannot supply canonical state.
+If `AI_REVIEW_CENTRAL_WORKFLOW` selects another safe `.yml`/`.yaml` filename,
+deploy the central workflow under that filename. Preparation derives the trusted
+path from GitHub's `GITHUB_WORKFLOW_REF` and checks its execution repository and
+default-branch ref before discovering state. Artifact provenance must match
+that exact deployed path, so custom deployments retain verdict reuse and
+blocker history. A request cannot select the trusted workflow path.
+Keep the deployed filename stable while canonical artifacts are retained. If
+discovery encounters a target/PR artifact from another otherwise valid central
+default-branch dispatch workflow, it fails with `STATE_LOAD_FAILED` before
+downloading that artifact or starting a new model review. Preparation stops
+without producing another canonical artifact. Restore the original
+deployment path to recover; changing the filename must not reroll a paid verdict
+or discard historical blockers, even after an engine upgrade.
 
 Completed same-base/head/engine PASS or BLOCK is reused without model calls.
 Blocker history survives corrections. Every review checks current base/head and

@@ -47,7 +47,124 @@ it("names canonical central artifacts by target repository as well as PR", () =>
   expect(centralArtifactName("O/R", 17)).toBe(centralArtifactName("o/r", 17));
   expect(centralArtifactName("o/r", 17)).not.toMatch(/experiment/);
 });
-it("loads target state from central artifacts and reuses it despite changed requirements metadata", async () => {
+it.each(["central-ai-pr-review.yml", "custom.yml", "custom.yaml"])(
+  "loads target state from the deployed %s and preserves reuse and blocker history",
+  async (filename) => {
+    const requests: string[] = [];
+    const engineRepo = "engine/service";
+    const canonical = state({}, "BLOCK");
+    const blocker = {
+      severity: "blocking" as const,
+      confidence: "high" as const,
+      title: "Missing guard",
+      location: null,
+      basis: ["code" as const],
+      evidence: "Unchecked access",
+      rationale: "Can crash",
+      remediation: "Validate input",
+    };
+    canonical.judge_result!.findings = [blocker];
+    canonical.findings = [
+      { ...blocker, finding_id: "retained-blocker", source_index: 0, publication_location: null },
+    ];
+    const name = centralArtifactName(identity.repository, identity.pr_number);
+    const octokit = new Octokit({
+      request: {
+        fetch: async (input: RequestInfo | URL) => {
+          const url = new URL(String(input));
+          requests.push(url.pathname);
+          if (url.pathname === "/repos/engine/service/actions/artifacts") {
+            expect(url.searchParams.get("name")).toBe(name);
+            return json({ total_count: 1, artifacts: [{ ...artifact(1), name }] });
+          }
+          if (url.pathname === "/repos/engine/service/actions/runs/1")
+            return json({
+              ...run(1),
+              repository: { full_name: engineRepo },
+              event: "workflow_dispatch",
+              path: `.github/workflows/${filename}`,
+              head_sha: identity.engine_sha,
+            });
+          if (url.pathname === "/repos/engine/service/actions/artifacts/1/zip")
+            return new Response(archive(canonical), {
+              headers: { "content-type": "application/zip" },
+            });
+          throw new Error("Unexpected target state access");
+        },
+      },
+    });
+    const store = new GitHubArtifactStateStore(octokit, {
+      defaultBranch: "main",
+      stateRepository: engineRepo,
+      workflowPath: `.github/workflows/${filename}`,
+    });
+    const result = await store.load({ ...identity, linear_issue: null }, "main");
+    expect(result).toEqual({ kind: "reuse", state: canonical });
+    const historical = await store.load({ ...identity, head_sha: "d".repeat(40) }, "main");
+    expect(historical).toMatchObject({ kind: "fresh", previous: canonical, history: [canonical] });
+    expect(requests.every((path) => path.startsWith("/repos/engine/service/"))).toBe(true);
+  },
+);
+it("rejects a different workflow even when a custom deployment path is trusted", () => {
+  const value = {
+    ...run(1),
+    repository: { full_name: "engine/service" },
+    path: ".github/workflows/custom.yml",
+    event: "workflow_dispatch",
+    head_sha: identity.engine_sha,
+  };
+  const path = ".github/workflows/custom.yml";
+  expect(trustedCentralWorkflowPin(value as never, "engine/service", "main", path)).toBe(
+    identity.engine_sha,
+  );
+  for (const change of [
+    { path: ".github/workflows/other.yml" },
+    { event: "pull_request" },
+    { head_branch: "untrusted" },
+    { repository: { full_name: "o/r" } },
+    { head_sha: "not-a-sha" },
+  ]) {
+    expect(
+      trustedCentralWorkflowPin({ ...value, ...change } as never, "engine/service", "main", path),
+    ).toBeNull();
+  }
+});
+it.each([
+  ["central-ai-pr-review.yml", "custom.yml", identity.engine_sha],
+  ["custom.yml", "other.yaml", identity.engine_sha],
+  ["central-ai-pr-review.yml", "custom.yml", "e".repeat(40)],
+  ["custom.yml", "other.yaml", "e".repeat(40)],
+])(
+  "fails closed when a retained canonical producer changes from %s to %s (engine %s)",
+  async (producer, deployed, engine) => {
+    const { store, requests } = conflictingCentralStore(
+      { path: `.github/workflows/${producer}`, head_sha: engine },
+      `.github/workflows/${deployed}`,
+    );
+    await expect(store.load(identity, "main")).rejects.toThrow("STATE_LOAD_FAILED");
+    expect(requests.some((path) => path.endsWith("/zip"))).toBe(false);
+  },
+);
+it.each([
+  { repository: { full_name: "other/service" } },
+  { head_branch: "untrusted" },
+  { event: "pull_request" },
+  { head_sha: "not-a-sha" },
+  { path: ".github/workflows/../custom.yml" },
+])(
+  "ignores an untrusted producer without treating it as a deployment conflict: %j",
+  async (change) => {
+    const { store, requests } = conflictingCentralStore(change, ".github/workflows/other.yml");
+    expect(await store.load(identity, "main")).toEqual({
+      kind: "fresh",
+      previous: null,
+      history: [],
+      rerunnable: null,
+    });
+    expect(requests.some((path) => path.endsWith("/zip"))).toBe(false);
+  },
+);
+function conflictingCentralStore(change: Record<string, unknown>, workflowPath: string) {
   const requests: string[] = [];
   const engineRepo = "engine/service";
   const name = centralArtifactName(identity.repository, identity.pr_number);
@@ -56,31 +173,30 @@ it("loads target state from central artifacts and reuses it despite changed requ
       fetch: async (input: RequestInfo | URL) => {
         const url = new URL(String(input));
         requests.push(url.pathname);
-        if (url.pathname === "/repos/engine/service/actions/artifacts") {
-          expect(url.searchParams.get("name")).toBe(name);
+        if (url.pathname === "/repos/engine/service/actions/artifacts")
           return json({ total_count: 1, artifacts: [{ ...artifact(1), name }] });
-        }
         if (url.pathname === "/repos/engine/service/actions/runs/1")
           return json({
             ...run(1),
             repository: { full_name: engineRepo },
             event: "workflow_dispatch",
-            path: ".github/workflows/central-ai-pr-review.yml",
+            path: ".github/workflows/custom.yml",
             head_sha: identity.engine_sha,
+            ...change,
           });
-        if (url.pathname === "/repos/engine/service/actions/artifacts/1/zip")
-          return new Response(archive(), { headers: { "content-type": "application/zip" } });
-        throw new Error("Unexpected target state access");
+        throw new Error("Unexpected conflicting artifact download");
       },
     },
   });
-  const result = await new GitHubArtifactStateStore(octokit, {
-    defaultBranch: "main",
-    stateRepository: engineRepo,
-  }).load({ ...identity, linear_issue: null }, "main");
-  expect(result.kind).toBe("reuse");
-  expect(requests.every((path) => path.startsWith("/repos/engine/service/"))).toBe(true);
-});
+  return {
+    store: new GitHubArtifactStateStore(octokit, {
+      defaultBranch: "main",
+      stateRepository: engineRepo,
+      workflowPath,
+    }),
+    requests,
+  };
+}
 function state(
   change: Partial<ReviewIdentityV1> = {},
   outcome: ReviewStateV1["outcome"] = "PASS",
@@ -117,6 +233,24 @@ function state(
     },
   };
 }
+it.each([".github/workflows/../custom.yml", ".github/workflows/custom.txt", "custom.yml", ""])(
+  "rejects invalid trusted workflow path %s before artifact discovery",
+  async (workflowPath) => {
+    let calls = 0;
+    const fetch = async () => {
+      calls++;
+      throw new Error("Unexpected artifact discovery");
+    };
+    await expect(
+      new GitHubArtifactStateStore(new Octokit({ request: { fetch } }), {
+        defaultBranch: "main",
+        stateRepository: "engine/service",
+        workflowPath,
+      }).load(identity, "main"),
+    ).rejects.toThrow("STATE_LOAD_FAILED");
+    expect(calls).toBe(0);
+  },
+);
 function json(value: unknown, status = 200) {
   return new Response(JSON.stringify(value), {
     status,

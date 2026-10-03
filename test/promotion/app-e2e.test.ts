@@ -211,6 +211,9 @@ it("fake installed App → missing graph artifact → central BLOCK → correcti
       ENGINE_SHA: engineSha,
       EXECUTION_REPOSITORY_PRIVATE: "true",
       STATE_REPOSITORY: "operator/private-execution",
+      STATE_DEFAULT_BRANCH: "main",
+      GITHUB_WORKFLOW_REF:
+        "operator/private-execution/.github/workflows/central-ai-pr-review.yml@refs/heads/main",
       REVIEW_REQUEST: JSON.stringify(request),
     };
     const dependencies = { github, engine, publisher, loadState };

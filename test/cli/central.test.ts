@@ -2,6 +2,7 @@ import { createReadStream } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { zipSync, strToU8 } from "fflate";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { runCentralCli } from "../../src/cli/central.js";
 import * as appAuth from "../../src/app/github-app.js";
@@ -57,6 +58,9 @@ async function graphFixture(mode: "off" | "codegraph", outcome: "PASS" | "BLOCK"
     ENGINE_SHA: "e".repeat(40),
     EXECUTION_REPOSITORY_PRIVATE: "true",
     STATE_REPOSITORY: "operator/private-execution",
+    STATE_DEFAULT_BRANCH: "main",
+    GITHUB_WORKFLOW_REF:
+      "operator/private-execution/.github/workflows/central-ai-pr-review.yml@refs/heads/main",
     REVIEW_REQUEST: JSON.stringify(request),
   };
   const github = {
@@ -144,6 +148,120 @@ async function graphFixture(mode: "off" | "codegraph", outcome: "PASS" | "BLOCK"
     },
   };
 }
+
+it.each(["main", "release/stable"])(
+  "reuses a custom-workflow BLOCK on %s and recovers a filename conflict without models",
+  async (branch) => {
+    const fixture = await graphFixture("off", "BLOCK");
+    expect(await runCentralCli(["execute"], fixture.env, fixture.dependencies)).toBe(0);
+    const canonical = parseReviewState(
+      await readFile(join(fixture.workDir, "out/ai-review-state-v1.json"), "utf8"),
+    );
+    const artifactName = (await import("../../src/state/artifact-name.js")).centralArtifactName(
+      internalRequest.repository,
+      internalRequest.prNumber,
+    );
+    const requests: string[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = new URL(String(input));
+      requests.push(url.pathname);
+      const json = (value: unknown) =>
+        new Response(JSON.stringify(value), { headers: { "content-type": "application/json" } });
+      if (url.pathname === "/repos/operator/private-execution")
+        return json({
+          full_name: "operator/private-execution",
+          private: true,
+          visibility: "private",
+        });
+      if (url.pathname === "/repos/operator/private-execution/actions/artifacts")
+        return json({
+          total_count: 1,
+          artifacts: [
+            {
+              id: 1,
+              name: artifactName,
+              expired: false,
+              created_at: "2026-10-03T00:00:00Z",
+              workflow_run: { id: 1 },
+            },
+          ],
+        });
+      if (url.pathname === "/repos/operator/private-execution/actions/runs/1")
+        return json({
+          id: 1,
+          repository: { full_name: "operator/private-execution" },
+          path: ".github/workflows/custom.yml",
+          event: "workflow_dispatch",
+          head_branch: branch,
+          head_sha: fixture.env.ENGINE_SHA,
+        });
+      if (url.pathname === "/repos/operator/private-execution/actions/artifacts/1/zip")
+        return new Response(
+          zipSync({ "ai-review-state-v1.json": strToU8(JSON.stringify(canonical)) }),
+          { headers: { "content-type": "application/zip" } },
+        );
+      throw new Error("Unexpected state request");
+    });
+    const directory = await mkdtemp(join(tmpdir(), "central-custom-reuse-"));
+    temps.push(directory);
+    const env = {
+      ...fixture.env,
+      RUNNER_TEMP: directory,
+      GITHUB_OUTPUT: join(directory, "output"),
+      STATE_READ_TOKEN: "central-read-canary",
+      STATE_DEFAULT_BRANCH: branch,
+      GITHUB_WORKFLOW_REF: `operator/private-execution/.github/workflows/custom.yml@refs/heads/${branch}`,
+    };
+    expect(
+      await runCentralCli(["prepare"], env, {
+        github: fixture.dependencies.github,
+        engine: fixture.dependencies.engine,
+      }),
+    ).toBe(0);
+    expect(await readFile(env.GITHUB_OUTPUT, "utf8")).toContain("action=STATE_READY");
+    expect(
+      parseReviewState(
+        await readFile(join(directory, "ai-pr-review/out/ai-review-state-v1.json"), "utf8"),
+      ),
+    ).toEqual(canonical);
+    expect(fixture.dependencies.engine.fresh).toHaveBeenCalledTimes(1);
+    expect(requests).toContain("/repos/operator/private-execution/actions/artifacts/1/zip");
+    const conflictDirectory = await mkdtemp(join(tmpdir(), "central-workflow-conflict-"));
+    temps.push(conflictDirectory);
+    const conflictEnv = {
+      ...env,
+      RUNNER_TEMP: conflictDirectory,
+      GITHUB_OUTPUT: join(conflictDirectory, "output"),
+      GITHUB_WORKFLOW_REF: `operator/private-execution/.github/workflows/central-ai-pr-review.yml@refs/heads/${branch}`,
+    };
+    expect(
+      await runCentralCli(["prepare"], conflictEnv, { github: fixture.dependencies.github }),
+    ).toBe(70);
+    await expect(
+      readFile(join(conflictDirectory, "ai-pr-review/out/ai-review-state-v1.json")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(readFile(conflictEnv.GITHUB_OUTPUT)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(requests.filter((path) => path.endsWith("/zip"))).toHaveLength(1);
+    const recoveryDirectory = await mkdtemp(join(tmpdir(), "central-workflow-restored-"));
+    temps.push(recoveryDirectory);
+    const recoveryEnv = {
+      ...env,
+      RUNNER_TEMP: recoveryDirectory,
+      GITHUB_OUTPUT: join(recoveryDirectory, "output"),
+    };
+    expect(
+      await runCentralCli(["prepare"], recoveryEnv, { github: fixture.dependencies.github }),
+    ).toBe(0);
+    expect(await readFile(recoveryEnv.GITHUB_OUTPUT, "utf8")).toContain("action=STATE_READY");
+    expect(
+      parseReviewState(
+        await readFile(join(recoveryDirectory, "ai-pr-review/out/ai-review-state-v1.json"), "utf8"),
+      ),
+    ).toEqual(canonical);
+    expect(fixture.dependencies.engine.fresh).toHaveBeenCalledTimes(1);
+    expect(requests.filter((path) => path.endsWith("/zip"))).toHaveLength(2);
+  },
+);
 
 const graphManifest = {
   schema_version: 1,
