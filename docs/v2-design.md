@@ -7,7 +7,9 @@ The mature review engine and V1 integration remain supported during migration.
 
 ## Product boundary
 
-Install the GitHub App, select repositories, comment `/ai-review` on an open PR.
+Pilot: the App owner installs the private GitHub App on its own repositories,
+selects repositories and comments `/ai-review` on an open PR. Public installation
+is deferred until separate admission, quotas/rate controls and funding policy exist.
 Only collaborators with write, maintain or admin permission may spend model
 budget. Pushes do not trigger V2 reviews. No consumer workflow, PAT, provider
 key, Linear credential or config file is required.
@@ -16,13 +18,18 @@ The gateway verifies HMAC-SHA256 over raw webhook bytes, accepts created PR
 conversation comments only, resolves installation and PR through GitHub APIs,
 authorizes the commenter, captures exact base/head and dispatches the central
 workflow. A durable SQLite command ledger handles delivery replay and command
-identity. Central Actions concurrency serializes reviews of each target PR;
+identity. Canonical Actions concurrency serializes reviews of each target PR
+using `queue: max`; shadows use independent run-scoped concurrency domains;
 canonical completed PASS/BLOCK state prevents rerolls across commands/restarts.
 Signed comment IDs remain consumed independently of unsigned delivery headers.
 A purpose-separated HMAC completion callback retains completed claims or releases
 only the original claim after terminal execution/publication failure. A new comment
 can then retry; old webhook/callback replay cannot release a later claim.
 Ambiguous dispatch failures remain claimed until reconciled by an operator.
+The local recovery CLI distinguishes active/executed/absent/ambiguous evidence.
+Under an operator maintenance freeze, it releases only matching cancelled runs
+with zero jobs across all attempts, after two fresh inspections. Missing runs or
+elapsed time never prove non-dispatch; completed claims and tombstones remain.
 
 ## Central execution
 
@@ -47,7 +54,7 @@ blockers, same-head reuse and both stale-head barriers remain mandatory.
 
 ## Credentials and runtime
 
-Gateway: App key, webhook secret, short-lived target read and central dispatch
+Gateway: separate target and central-dispatch App keys, webhook secret, scoped target read and central dispatch
 tokens. Preparation: scoped target read token, central state read token and
 optional Linear credentials. Model worker: isolated read-only review root and
 provider key; no App key, write token or Linear secret. Publisher: canonical
@@ -57,8 +64,10 @@ Target source is always inert; it is never installed, built or executed.
 
 App permissions: metadata read (implicit), contents read, pull requests write
 (includes read/comment publication), issues read (issue-comment subscription),
-checks write, commit statuses read and Actions write (dispatch in the central
-installation, read CI evidence in targets). Every token is narrowed to one
+checks write, commit statuses read and Actions read for CI evidence. Both Apps
+are private. A separate dispatcher App has only metadata read/Actions write and
+is installed only on the execution repository. Its credentials never enter
+central review jobs. Operator recovery uses metadata/Actions read only. Every token is narrowed to one
 repository and an explicit phase-specific permission subset. No user IDs or
 installation IDs are embedded in code. Manifest endpoints are operator supplied.
 

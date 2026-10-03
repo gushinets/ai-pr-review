@@ -2,15 +2,18 @@
 
 ## V2 operator checklist
 
-Consumers install the GitHub App, select repositories and comment `/ai-review`
+The App owner installs the private pilot App, selects repositories and comments `/ai-review`
 on an open PR. Write, maintain or admin access is required. No consumer
 workflow, provider secret, Linear credential, PAT or config is required.
 
 The following production setup requires the account owner:
 
-1. Register an App using `app/manifest.json`, replacing the homepage and webhook
+1. Register the private target App using `app/manifest.json`, replacing the homepage and webhook
    placeholders with operator URLs. Generate its private key and webhook secret.
-   Install it on the central execution repository and selected target repositories.
+   Install it on selected pilot repositories owned by the App's account/organization.
+   A private App cannot be installed on unrelated customer accounts. Register a
+   **different private dispatcher App** using `app/dispatch-manifest.json` and
+   install it only on the central execution repository. Generate a separate key.
 2. Deploy `app/Dockerfile` behind HTTPS. Mount a persistent, private `/data`
    volume for SQLite; preserve it across gateway restarts. Configure the gateway
    variables below. Forward POST `/webhook` and POST `/completion`; do not expose
@@ -27,17 +30,22 @@ The following production setup requires the account owner:
 
 Gateway environment:
 
-| Variable                                                  | Purpose                                                            |
-| --------------------------------------------------------- | ------------------------------------------------------------------ |
-| `GITHUB_APP_ID`                                           | Registered App's numeric ID                                        |
-| `GITHUB_APP_PRIVATE_KEY` or `GITHUB_APP_PRIVATE_KEY_FILE` | PEM key; prefer a private mounted file                             |
-| `GITHUB_WEBHOOK_SECRET`                                   | Raw webhook HMAC verification                                      |
-| `AI_REVIEW_COMPLETION_SECRET`                             | Independent HMAC key for central completion callbacks              |
-| `AI_REVIEW_CENTRAL_REPOSITORY`                            | Execution repository, e.g. `gushinets/ai-pr-review`                |
-| `AI_REVIEW_CENTRAL_WORKFLOW`                              | Optional; defaults to `central-ai-pr-review.yml`                   |
-| `AI_REVIEW_CENTRAL_REF`                                   | Optional; defaults to `main`; must be the protected default branch |
-| `AI_REVIEW_LEDGER_PATH`                                   | Persistent SQLite file, e.g. `/data/commands.sqlite`               |
-| `PORT`                                                    | Optional; defaults to 3000                                         |
+Keep the central dispatcher's credentials only on the gateway /
+operator host, never in central review jobs. Prefer private mounted PEM files.
+
+| Variable                                                                    | Purpose                                                            |
+| --------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| `GITHUB_APP_ID`                                                             | Registered target App's numeric ID                                 |
+| `GITHUB_APP_PRIVATE_KEY` or `GITHUB_APP_PRIVATE_KEY_FILE`                   | Target App PEM key; prefer a private mounted file                  |
+| `GITHUB_DISPATCH_APP_ID`                                                    | Required central dispatcher App ID; different from target App ID   |
+| `GITHUB_DISPATCH_APP_PRIVATE_KEY` or `GITHUB_DISPATCH_APP_PRIVATE_KEY_FILE` | Required central dispatcher PEM key; prefer a private mounted file |
+| `GITHUB_WEBHOOK_SECRET`                                                     | Raw webhook HMAC verification                                      |
+| `AI_REVIEW_COMPLETION_SECRET`                                               | Independent HMAC key for central completion callbacks              |
+| `AI_REVIEW_CENTRAL_REPOSITORY`                                              | Execution repository, e.g. `gushinets/ai-pr-review`                |
+| `AI_REVIEW_CENTRAL_WORKFLOW`                                                | Optional; defaults to `central-ai-pr-review.yml`                   |
+| `AI_REVIEW_CENTRAL_REF`                                                     | Optional; defaults to `main`; must be the protected default branch |
+| `AI_REVIEW_LEDGER_PATH`                                                     | Persistent SQLite file, e.g. `/data/commands.sqlite`               |
+| `PORT`                                                                      | Optional; defaults to 3000                                         |
 
 Build the gateway from the repository root:
 
@@ -54,15 +62,18 @@ must inspect the central run before changing the ledger.
 
 ### App permissions and credential boundaries
 
-The App needs metadata read, contents read, pull requests write, issues read,
-checks write, commit statuses read and Actions write. Issues read permits the
-issue-comment subscription; publication uses PR endpoints. Actions write is
-needed only to dispatch the central workflow. No issues write permission is used.
+The target App needs metadata read, contents read, pull requests write, issues read,
+checks write, commit statuses read and **Actions read** for CI runs/jobs/logs.
+Issues read permits the issue-comment subscription; publication uses PR endpoints.
+The separate dispatcher App needs only metadata read and **Actions write**, only
+on the central repository. No customer installation has Actions write; no broad
+PAT or issues write permission is used. Both manifests ship with `public: false`.
 
 Every installation token is narrowed to one verified repository. Read tokens
 receive metadata, contents, pull requests, checks, statuses and Actions read.
 Publisher tokens receive metadata read plus pull requests/checks write. Dispatch
-tokens receive metadata read and Actions write. Installation identity, App
+tokens use the dispatcher identity and receive metadata read and Actions write.
+Operator inspection narrows that identity further to metadata/Actions read. Installation identity, App
 ownership, repository access, permissions, suspension and token scope are checked
 through GitHub; no installation or user IDs are fixed in code.
 
@@ -75,6 +86,11 @@ and all GitHub tokens are absent from that subprocess. Publisher runs in a fresh
 job with only sanitized state and a scoped write token. Completion runs in another
 fresh job with only sanitized state and its HMAC secret. No phase executes target
 source, installs target dependencies or loads HEAD instructions.
+
+Keep the pilot private. Before any public App rollout, separately add account /
+organization admission, per-installation quota/rate limits and a funding policy.
+The gateway already captures installation identity before its durable command
+claim; that boundary can enforce admission/usage later. This PR adds no billing.
 
 ### Optional config and requirements
 
@@ -113,6 +129,57 @@ comment to retry. Signed comment/delivery tombstones remain, so replaying an old
 webhook or callback cannot release a later claim. If state was already persisted,
 publication recovery reuses it without rerolling. Callback failure requires
 operator reconciliation; retry the completion job after repairing HTTPS/secrets.
+
+### Pending-run and dispatch recovery (operator only)
+
+Canonical concurrency is `ai-review-v2-canonical-<repository>-<PR>` with
+`cancel-in-progress: false` and `queue: max`. GitHub queues up to 100 pending
+runs; overflow may still be cancelled. Every comparison or explicit shadow uses
+`ai-review-v2-shadow-<run-id>-<repository>-<PR>`, so experiments cannot replace
+pending canonical commands or each other. Run titles bind canonical executions
+to `AI PR Review V2 canonical <delivery-id>` for inspection.
+
+After an accepted dispatch that never executed, use the local recovery CLI with
+the persistent ledger and gateway environment. It mints only a single-central-
+repository metadata/Actions read token from the dispatcher App. It is not an HTTP
+endpoint and is never callable by PR authors or model tools.
+
+```bash
+node dist/src/app/reconcile.js inspect DELIVERY_ID
+```
+
+Results distinguish `ACTIVE` (queued/pending/waiting/running), `COMPLETED`
+(immutable ledger), `EXECUTED_OR_UNKNOWN` (any job in any attempt, or an executed
+terminal run), `NO_MATCHING_RUN`, `AMBIGUOUS`, and `PROVEN_NOT_EXECUTED` (all
+matching runs cancelled, zero jobs across all attempts). API failure, retention,
+missing titles, incomplete/oversized history and ambiguous dispatch leave the
+claim held. **No matching run is not proof that dispatch never reached GitHub**.
+The bounded inspection covers at most 1,000 retained workflow runs; older/unlinked
+evidence requires direct operator investigation, never a blind ledger delete.
+
+To release a proven cancelled, never-started command, first stop the gateway,
+disable the central workflow and prohibit dispatch/reruns during maintenance.
+Cancel any queued matching runs and verify none has started. With that freeze
+still in effect:
+
+```bash
+AI_REVIEW_RECONCILIATION_FROZEN=true node dist/src/app/reconcile.js release DELIVERY_ID
+```
+
+The CLI rereads GitHub evidence twice and releases only the original delivery if
+both reads prove cancellation with zero jobs. Signed comment/delivery tombstones
+survive. Resume the workflow/gateway, then post a **new** command. Completed
+PASS/BLOCK claims cannot be released. Any started execution must recover via its
+original completion/publisher jobs and canonical artifacts; never pay for a
+fresh model run just to repair publication. For a definitely unsubmitted command,
+an operator must independently prove no request reached GitHub before using the
+low-level ledger `reconcile(delivery, "proven_not_dispatched")` API; absent or old
+run records and elapsed time do not establish that proof.
+
+GitHub APIs and SQLite cannot participate in one transaction. The maintenance
+freeze is required to prevent a trusted operator's concurrent dispatch/rerun from
+invalidating inspection. This is deliberate operator-only recovery, not an
+automatic timeout sweeper.
 
 ### CodeGraph and comparison
 

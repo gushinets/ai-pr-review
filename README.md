@@ -1,10 +1,10 @@
 # AI PR Review
 
-Installable GitHub App for deterministic, multi-model PR review.
+Private GitHub App pilot for deterministic, multi-model PR review.
 
 ## Use AI PR Review
 
-1. Install the operator's **AI PR Review GitHub App** and select repositories.
+1. The App owner installs the private **AI PR Review GitHub App** on pilot repositories.
 2. Open a pull request.
 3. A collaborator with write, maintain or admin access comments `/ai-review`.
 
@@ -16,6 +16,10 @@ reused; failed execution/publication can be retried without rerolling a verdict.
 Consumers need no review workflow, provider key, Linear credential, PAT or
 configuration file. Optional configuration and policy are read only from BASE.
 Linear is optional. CodeGraph comparison runs are private shadows.
+
+This pilot supports repositories owned by the App's account or organization.
+Public installation requires a later access/quota/rate-control decision; no
+billing system or unrestricted public rollout is included.
 
 Operator deployment and live App acceptance are still required; see the
 [operator checklist](docs/operations.md#v2-operator-checklist). Fixtures do not

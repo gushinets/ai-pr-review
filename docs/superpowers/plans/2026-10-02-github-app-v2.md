@@ -75,3 +75,32 @@ GitHub Actions and pinned CodeGraph in a bounded Linux container.
   App registration/installation, HTTPS deployment, persistent storage and secrets
   require operator setup; `docs/operations.md` contains the checklist and live
   acceptance sequence. No real installed-App/model E2E is claimed.
+
+## PR #7 final fix pass
+
+- [x] Isolate canonical and shadow concurrency, enable GitHub's bounded pending
+      queue, and add operator reconciliation for accepted dispatches that never
+      start. Absence or elapsed time never proves safety; release requires a
+      maintenance freeze and two observations of cancelled runs with no jobs
+      across any attempt. Completed commands remain immutable.
+- [x] Ship a private pilot. Use a separate private dispatcher App installed only
+      on the central repository. The target App requests Actions read; explicit
+      repository, App ownership, token expiration and effective scope checks
+      remain enforced.
+- [x] Resolve validated graph telemetry before models. Missing, invalid or
+      unreadable graph manifests become ARTIFACT_IO; graph-off needs no manifest.
+      Decode raw stdout/stderr buffers once after close while preserving byte caps.
+- [x] Verify fresh Linux `npm ci`, `npm run check` and `npm run build`: 1,180 tests
+      passed; the gated real CodeGraph fixture passed separately. Rebuilt the
+      gateway image and checked `/healthz` with separate fake App identities.
+      All security/adversarial tests remain enabled.
+- [x] Complete a fresh independent review of the entire merge-base diff: no
+      material findings. Its separate targeted run passed 267 tests across 14
+      files; the live installed-App acceptance gap remains operational.
+- [x] Record the three scoped code fixes and private two-App operations guide.
+      PR #7 tracks the pushed head, evidence replies/thread resolutions and
+      GitHub CI; its description records final validation. Do not merge.
+- Operational acceptance still requires private App registration and installation,
+  gateway HTTPS deployment, persistent storage, separate App keys, central
+  variables/secrets and a real installed-App zero-config E2E. Public admission,
+  quotas and billing remain future work.
