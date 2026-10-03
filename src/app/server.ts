@@ -2,7 +2,11 @@ import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { pathToFileURL } from "node:url";
 import { handleWebhook, MAX_WEBHOOK_BYTES, type GatewayDependencies } from "./gateway.js";
-import { createAppGitHubGateway, type AppCredentials } from "./github-app.js";
+import {
+  createAppGitHubGateway,
+  type AppCredentials,
+  type CentralDispatchConfig,
+} from "./github-app.js";
 import { SqliteCommandLedger } from "./command-ledger.js";
 import { handleCompletion, MAX_COMPLETION_BYTES } from "./completion.js";
 
@@ -99,7 +103,7 @@ export interface GatewayConfig {
   credentials: AppCredentials;
   webhookSecret: string;
   completionSecret: string;
-  central: { repository: string; workflow: string; ref: string };
+  central: CentralDispatchConfig;
   ledgerPath: string;
   port: number;
 }
@@ -110,10 +114,18 @@ export function readGatewayConfig(env: NodeJS.ProcessEnv): GatewayConfig {
       (env.GITHUB_APP_PRIVATE_KEY_FILE
         ? readFileSync(env.GITHUB_APP_PRIVATE_KEY_FILE, "utf8")
         : undefined);
+    const dispatchPrivateKey =
+      env.GITHUB_DISPATCH_APP_PRIVATE_KEY ??
+      (env.GITHUB_DISPATCH_APP_PRIVATE_KEY_FILE
+        ? readFileSync(env.GITHUB_DISPATCH_APP_PRIVATE_KEY_FILE, "utf8")
+        : undefined);
     const portText = env.PORT ?? "3000";
     if (
       !env.GITHUB_APP_ID ||
       !privateKey ||
+      !env.GITHUB_DISPATCH_APP_ID ||
+      !dispatchPrivateKey ||
+      Number(env.GITHUB_APP_ID) === Number(env.GITHUB_DISPATCH_APP_ID) ||
       !env.GITHUB_WEBHOOK_SECRET ||
       !env.AI_REVIEW_COMPLETION_SECRET ||
       !env.AI_REVIEW_CENTRAL_REPOSITORY ||
@@ -128,6 +140,7 @@ export function readGatewayConfig(env: NodeJS.ProcessEnv): GatewayConfig {
       webhookSecret: env.GITHUB_WEBHOOK_SECRET,
       completionSecret: env.AI_REVIEW_COMPLETION_SECRET,
       central: {
+        credentials: { appId: env.GITHUB_DISPATCH_APP_ID, privateKey: dispatchPrivateKey },
         repository: env.AI_REVIEW_CENTRAL_REPOSITORY,
         workflow: env.AI_REVIEW_CENTRAL_WORKFLOW ?? "central-ai-pr-review.yml",
         ref: env.AI_REVIEW_CENTRAL_REF ?? "main",

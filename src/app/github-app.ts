@@ -5,6 +5,12 @@ export interface AppCredentials {
   appId: string;
   privateKey: string;
 }
+export interface CentralDispatchConfig {
+  repository: string;
+  workflow: string;
+  ref: string;
+  credentials: AppCredentials;
+}
 export interface AppClientOptions {
   fetch?: typeof globalThis.fetch;
   now?: () => number;
@@ -30,7 +36,7 @@ export async function getAppIdentity(
     throw new Error("APP_IDENTITY_REJECTED");
   }
 }
-type Phase = "read" | "publish" | "dispatch";
+type Phase = "read" | "publish" | "dispatch" | "inspect";
 type Permissions = Record<string, "read" | "write">;
 const phasePermissions: Record<Phase, Permissions> = {
   read: {
@@ -43,6 +49,7 @@ const phasePermissions: Record<Phase, Permissions> = {
   },
   publish: { metadata: "read", pull_requests: "write", checks: "write" },
   dispatch: { metadata: "read", actions: "write" },
+  inspect: { metadata: "read", actions: "read" },
 };
 
 export function createAppJwt(credentials: AppCredentials, now = Date.now()): string {
@@ -199,11 +206,14 @@ export async function mintInstallationToken(
 }
 export function createAppGitHubGateway(
   credentials: AppCredentials,
-  central: { repository: string; workflow: string; ref: string },
+  central: CentralDispatchConfig,
   options: AppClientOptions = {},
 ): AppGitHubGateway {
   const centralParams = repoParams(central.repository);
   if (
+    !central.credentials?.appId ||
+    !central.credentials.privateKey ||
+    Number(central.credentials.appId) === Number(credentials.appId) ||
     !/^[A-Za-z0-9_.-]+\.ya?ml$/.test(central.workflow) ||
     !central.ref ||
     central.ref.length > 255 ||
@@ -244,7 +254,7 @@ export function createAppGitHubGateway(
       };
     },
     async dispatch(request) {
-      const verified = await installation(credentials, central.repository, options);
+      const verified = await installation(central.credentials, central.repository, options);
       const token = await mint(verified, central.repository, "dispatch", options);
       try {
         await client(token, options).rest.actions.createWorkflowDispatch({

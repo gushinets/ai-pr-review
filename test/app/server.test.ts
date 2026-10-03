@@ -1,5 +1,5 @@
 import { createHmac } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
@@ -46,6 +46,8 @@ async function fixture() {
 const env = {
   GITHUB_APP_ID: "123",
   GITHUB_APP_PRIVATE_KEY: "private-key",
+  GITHUB_DISPATCH_APP_ID: "456",
+  GITHUB_DISPATCH_APP_PRIVATE_KEY: "dispatcher-private-key",
   GITHUB_WEBHOOK_SECRET: "webhook-secret",
   AI_REVIEW_COMPLETION_SECRET: "completion-secret",
   AI_REVIEW_CENTRAL_REPOSITORY: "engine/central",
@@ -162,7 +164,12 @@ describe("gateway deployment config", () => {
       credentials: { appId: "123", privateKey: "private-key" },
       webhookSecret: "webhook-secret",
       completionSecret: "completion-secret",
-      central: { repository: "engine/central", workflow: "central-ai-pr-review.yml", ref: "main" },
+      central: {
+        repository: "engine/central",
+        workflow: "central-ai-pr-review.yml",
+        ref: "main",
+        credentials: { appId: "456", privateKey: "dispatcher-private-key" },
+      },
       ledgerPath: "persistent/commands.sqlite",
       port: 3000,
     });
@@ -178,6 +185,8 @@ describe("gateway deployment config", () => {
   it.each([
     "GITHUB_APP_ID",
     "GITHUB_APP_PRIVATE_KEY",
+    "GITHUB_DISPATCH_APP_ID",
+    "GITHUB_DISPATCH_APP_PRIVATE_KEY",
     "GITHUB_WEBHOOK_SECRET",
     "AI_REVIEW_COMPLETION_SECRET",
     "AI_REVIEW_CENTRAL_REPOSITORY",
@@ -186,6 +195,35 @@ describe("gateway deployment config", () => {
     const changed: Record<string, string> = { ...env };
     delete changed[name];
     expect(() => readGatewayConfig(changed)).toThrow("GATEWAY_CONFIG_INVALID");
+  });
+  it("rejects a dispatcher using the target App identity", () => {
+    expect(() => readGatewayConfig({ ...env, GITHUB_DISPATCH_APP_ID: "123" })).toThrow(
+      "GATEWAY_CONFIG_INVALID",
+    );
+  });
+  it("reads the separate dispatcher key from a mounted file", () => {
+    const dir = mkdtempSync(join(tmpdir(), "app-dispatch-key-"));
+    cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
+    const path = join(dir, "dispatcher.pem");
+    writeFileSync(path, "mounted-dispatcher-key");
+    const { GITHUB_DISPATCH_APP_PRIVATE_KEY: _inlineKey, ...fileEnv } = env;
+    expect(
+      readGatewayConfig({ ...fileEnv, GITHUB_DISPATCH_APP_PRIVATE_KEY_FILE: path }).central
+        .credentials,
+    ).toEqual({ appId: "456", privateKey: "mounted-dispatcher-key" });
+    expect(
+      readGatewayConfig({ ...env, GITHUB_DISPATCH_APP_PRIVATE_KEY_FILE: path }).central.credentials,
+    ).toEqual({ appId: "456", privateKey: "dispatcher-private-key" });
+    let diagnostic = "";
+    try {
+      readGatewayConfig({
+        ...fileEnv,
+        GITHUB_DISPATCH_APP_PRIVATE_KEY_FILE: join(dir, "secret-key-path"),
+      });
+    } catch (error) {
+      diagnostic = (error as Error).message;
+    }
+    expect(diagnostic).toBe("GATEWAY_CONFIG_INVALID");
   });
   it.each(["0", "65536", "not-a-port", "3000.1"])("rejects port %s", (PORT) => {
     expect(() => readGatewayConfig({ ...env, PORT })).toThrow("GATEWAY_CONFIG_INVALID");

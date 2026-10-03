@@ -12,6 +12,11 @@ const credentials = {
   appId: "123",
   privateKey: privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
 };
+const dispatchKeys = generateKeyPairSync("rsa", { modulusLength: 2048 });
+const dispatchCredentials = {
+  appId: "456",
+  privateKey: dispatchKeys.privateKey.export({ type: "pkcs8", format: "pem" }).toString(),
+};
 const now = Date.parse("2026-10-02T10:00:00Z");
 const permissions = {
   metadata: "read",
@@ -20,7 +25,7 @@ const permissions = {
   issues: "read",
   checks: "write",
   statuses: "read",
-  actions: "write",
+  actions: "read",
 };
 const readPermissions = {
   metadata: "read",
@@ -30,7 +35,12 @@ const readPermissions = {
   statuses: "read",
   actions: "read",
 };
-const central = { repository: "engine/central", workflow: "ai-review-v2.yml", ref: "main" };
+const central = {
+  repository: "engine/central",
+  workflow: "ai-review-v2.yml",
+  ref: "main",
+  credentials: dispatchCredentials,
+};
 const request = {
   schema_version: 2,
   repository: "owner/repo",
@@ -64,6 +74,12 @@ function fixture() {
       permissions: { ...permissions },
       suspended_at: null as string | null,
     },
+    centralInstallation: {
+      id: 29,
+      app_id: 456,
+      permissions: { metadata: "read", actions: "write" },
+      suspended_at: null as string | null,
+    },
     permission: "write",
     pr: {
       number: 5,
@@ -75,6 +91,9 @@ function fixture() {
     scope: { total_count: 1, repositories: [{ id: 99, full_name: "owner/repo" }] },
     errorPath: "",
     token: "ghs_APPID_JWT-long-new-format",
+    publishToken: "ghs_TARGET-publish-token",
+    dispatchToken: "ghs_DISPATCH-central-token",
+    centralScope: { total_count: 1, repositories: [{ id: 100, full_name: "engine/central" }] },
     expiresAt: new Date(now + 3_600_000).toISOString(),
     calls,
     options: { now: () => now, fetch: undefined as unknown as typeof globalThis.fetch },
@@ -95,20 +114,19 @@ function fixture() {
     let data: unknown;
     if (url.pathname === "/app") data = { id: 123, slug: "ai-review-example" };
     else if (url.pathname.endsWith("/installation"))
-      data = {
-        ...f.installation,
-        id: url.pathname.includes("engine/central") ? 29 : f.installation.id,
-      };
+      data = url.pathname.includes("engine/central") ? f.centralInstallation : f.installation;
     else if (url.pathname.endsWith("/access_tokens"))
       data = {
-        token: f.token,
+        token: url.pathname.includes("/29/")
+          ? f.dispatchToken
+          : (body?.permissions as Record<string, string>)?.checks === "write"
+            ? f.publishToken
+            : f.token,
         expires_at: f.expiresAt,
         permissions: f.returnedPermissions ?? body?.permissions,
       };
     else if (url.pathname === "/installation/repositories")
-      data = calls.at(-2)?.path.includes("/29/")
-        ? { total_count: 1, repositories: [{ id: 100, full_name: "engine/central" }] }
-        : f.scope;
+      data = auth === `token ${f.dispatchToken}` ? f.centralScope : f.scope;
     else if (url.pathname.endsWith("/pulls/5")) data = f.pr;
     else if (url.pathname.endsWith("/collaborators/writer/permission"))
       data = { permission: f.permission };
@@ -185,13 +203,13 @@ describe("App JWT and scoped installation credentials", () => {
   it.each([
     ["read", readPermissions],
     ["publish", { metadata: "read", pull_requests: "write", checks: "write" }],
-    ["dispatch", { metadata: "read", actions: "write" }],
   ] as const)(
     "mints only one repository and explicit %s rights",
     async (phase, expectedPermissions) => {
       const f = fixture();
+      const token = phase === "publish" ? f.publishToken : f.token;
       expect(await mintInstallationToken(credentials, 17, "owner/repo", phase, f.options)).toBe(
-        f.token,
+        token,
       );
       expect(f.calls.map(({ path, method }) => [method, path])).toEqual([
         ["GET", "/repos/owner/repo/installation"],
@@ -203,7 +221,7 @@ describe("App JWT and scoped installation credentials", () => {
         permissions: expectedPermissions,
       });
       expect(f.calls[0]?.auth).toMatch(/^bearer ey/);
-      expect(f.calls[2]?.auth).toBe(`token ${f.token}`);
+      expect(f.calls[2]?.auth).toBe(`token ${token}`);
     },
   );
   it.each(["contents", "pull_requests", "checks", "statuses", "actions", "metadata"])(
@@ -217,6 +235,17 @@ describe("App JWT and scoped installation credentials", () => {
       expect(f.calls).toHaveLength(1);
     },
   );
+  it("narrows the central dispatcher to Actions read for operator reconciliation", async () => {
+    const f = fixture();
+    expect(
+      await mintInstallationToken(dispatchCredentials, 29, "engine/central", "inspect", f.options),
+    ).toBe(f.dispatchToken);
+    expect(f.calls[1]?.body).toEqual({
+      repositories: ["central"],
+      permissions: { metadata: "read", actions: "read" },
+    });
+    expect(f.calls[2]?.auth).toBe(`token ${f.dispatchToken}`);
+  });
   it("rejects wrong installation, wrong App identity and suspended installs before minting", async () => {
     for (const installation of [{ id: 18 }, { app_id: 124 }, { suspended_at: "2026-10-01" }]) {
       const f = fixture();
@@ -270,6 +299,22 @@ describe("App JWT and scoped installation credentials", () => {
 });
 
 describe("trusted GitHub App gateway adapter", () => {
+  it("requires a separate dispatcher identity without leaking credentials", () => {
+    for (const changed of [
+      { ...central, credentials: undefined },
+      { ...central, credentials: { ...dispatchCredentials, appId: "" } },
+      { ...central, credentials: { ...dispatchCredentials, privateKey: "" } },
+      { ...central, credentials },
+    ]) {
+      let diagnostic = "";
+      try {
+        createAppGitHubGateway(credentials, changed as never);
+      } catch (error) {
+        diagnostic = (error as Error).message;
+      }
+      expect(diagnostic).toBe("CENTRAL_DISPATCH_CONFIG_INVALID");
+    }
+  });
   it.each(["write", "maintain", "admin"])(
     "allows %s commenter and captures live PR",
     async (permission) => {
@@ -334,7 +379,7 @@ describe("trusted GitHub App gateway adapter", () => {
       expect(f.calls.every(({ path }) => !path.includes("dispatch"))).toBe(true);
     }
   });
-  it("uses separately resolved central installation and only Actions write for dispatch", async () => {
+  it("uses only dispatcher JWTs and central-scoped Actions write for dispatch", async () => {
     const f = fixture();
     await createAppGitHubGateway(credentials, central, f.options).dispatch(request);
     expect(f.calls.map(({ path }) => path)).toEqual([
@@ -348,14 +393,89 @@ describe("trusted GitHub App gateway adapter", () => {
       permissions: { metadata: "read", actions: "write" },
     });
     expect(f.calls[3]?.body).toEqual({ ref: "main", inputs: { request: JSON.stringify(request) } });
+    expect(f.calls[2]?.auth).toBe(`token ${f.dispatchToken}`);
+    expect(f.calls[3]?.auth).toBe(`token ${f.dispatchToken}`);
+    for (const call of f.calls.slice(0, 2)) {
+      const [header, payload, signature] = call.auth.replace(/^bearer /, "").split(".");
+      expect(JSON.parse(Buffer.from(payload!, "base64url").toString()).iss).toBe("456");
+      expect(
+        verify(
+          "RSA-SHA256",
+          Buffer.from(`${header}.${payload}`),
+          dispatchKeys.publicKey,
+          Buffer.from(signature!, "base64url"),
+        ),
+      ).toBe(true);
+    }
+  });
+  it("keeps target read and publisher tokens separate from dispatcher credentials", async () => {
+    const f = fixture();
+    const gateway = createAppGitHubGateway(credentials, central, f.options);
+    await gateway.resolveTarget("owner/repo", 17, 5, "writer");
+    expect(await mintInstallationToken(credentials, 17, "owner/repo", "publish", f.options)).toBe(
+      f.publishToken,
+    );
+    const targetCalls = [...f.calls];
+    await gateway.dispatch(request);
+    for (const call of targetCalls.filter(({ auth }) => auth.startsWith("bearer "))) {
+      const [header, payload, signature] = call.auth.slice("bearer ".length).split(".");
+      expect(JSON.parse(Buffer.from(payload!, "base64url").toString()).iss).toBe("123");
+      expect(
+        verify(
+          "RSA-SHA256",
+          Buffer.from(`${header}.${payload}`),
+          publicKey,
+          Buffer.from(signature!, "base64url"),
+        ),
+      ).toBe(true);
+    }
+    for (const call of targetCalls.filter(({ path }) => path.endsWith("/access_tokens"))) {
+      expect(call.body?.repositories).toEqual(["repo"]);
+      expect((call.body!.permissions as Record<string, string>).actions).not.toBe("write");
+    }
+    expect(targetCalls.some(({ auth }) => auth === `token ${f.token}`)).toBe(true);
+    expect(targetCalls.some(({ auth }) => auth === `token ${f.publishToken}`)).toBe(true);
+    expect(targetCalls.some(({ auth }) => auth === `token ${f.dispatchToken}`)).toBe(false);
   });
   it("does not dispatch when central installation cannot grant Actions write", async () => {
     const f = fixture();
-    f.installation.permissions.actions = "read";
+    f.centralInstallation.permissions.actions = "read";
     await expect(
       createAppGitHubGateway(credentials, central, f.options).dispatch(request),
     ).rejects.toThrow("INSTALLATION_PERMISSIONS_INSUFFICIENT");
     expect(f.calls).toHaveLength(1);
+  });
+  it("rejects dispatcher installation ownership, suspension, expiry and broadened scope", async () => {
+    for (const change of [
+      (f: ReturnType<typeof fixture>) => {
+        f.centralInstallation.app_id = 123;
+      },
+      (f: ReturnType<typeof fixture>) => {
+        f.centralInstallation.suspended_at = "2026-10-01";
+      },
+      (f: ReturnType<typeof fixture>) => {
+        f.expiresAt = new Date(now - 1).toISOString();
+      },
+      (f: ReturnType<typeof fixture>) => {
+        f.returnedPermissions = { metadata: "read", actions: "write", contents: "read" };
+      },
+      (f: ReturnType<typeof fixture>) => {
+        f.centralScope = {
+          total_count: 2,
+          repositories: [
+            { id: 100, full_name: "engine/central" },
+            { id: 99, full_name: "owner/repo" },
+          ],
+        };
+      },
+    ]) {
+      const f = fixture();
+      change(f);
+      await expect(
+        createAppGitHubGateway(credentials, central, f.options).dispatch(request),
+      ).rejects.toThrow();
+      expect(f.calls.some(({ path }) => path.endsWith("/dispatches"))).toBe(false);
+    }
   });
   it("does not retry an ambiguous workflow dispatch failure", async () => {
     const f = fixture();

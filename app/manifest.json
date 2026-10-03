@@ -5,7 +5,7 @@
     "url": "https://REPLACE_WITH_OPERATOR_GATEWAY/webhook",
     "active": true
   },
-  "public": true,
+  "public": false,
   "default_permissions": {
     "metadata": "read",
     "contents": "read",
@@ -13,7 +13,7 @@
     "issues": "read",
     "checks": "write",
     "statuses": "read",
-    "actions": "write"
+    "actions": "read"
   },
   "default_events": ["issue_comment"]
 }
