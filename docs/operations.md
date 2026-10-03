@@ -190,6 +190,8 @@ read-only container. Source is inert; target CodeGraph configuration, indexes
 and ignore files are not loaded. Limits cover time, memory, processes, input,
 output, graph traversal and dynamic-boundary scans. Failed graph generation
 records a fixed failure code and falls back to ordinary review.
+The optional image build occurs before credentials are minted and may fail
+without stopping ordinary review; an unavailable image records `UNAVAILABLE`.
 
 Dispatch the same validated request with `compare: true` to run both `off` and
 `codegraph` as fresh private shadows, including when production state is cached.

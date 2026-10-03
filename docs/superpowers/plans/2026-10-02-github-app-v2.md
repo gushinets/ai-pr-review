@@ -90,7 +90,7 @@ GitHub Actions and pinned CodeGraph in a bounded Linux container.
 - [x] Resolve validated graph telemetry before models. Missing, invalid or
       unreadable graph manifests become ARTIFACT_IO; graph-off needs no manifest.
       Decode raw stdout/stderr buffers once after close while preserving byte caps.
-- [x] Verify fresh Linux `npm ci`, `npm run check` and `npm run build`: 1,180 tests
+- [x] Verify fresh Linux `npm ci`, `npm run check` and `npm run build`: 1,181 tests
       passed; the gated real CodeGraph fixture passed separately. Rebuilt the
       gateway image and checked `/healthz` with separate fake App identities.
       All security/adversarial tests remain enabled.
@@ -100,6 +100,13 @@ GitHub Actions and pinned CodeGraph in a bounded Linux container.
 - [x] Record the three scoped code fixes and private two-App operations guide.
       PR #7 tracks the pushed head, evidence replies/thread resolutions and
       GitHub CI; its description records final validation. Do not merge.
+- CodeRabbit's additional outside-diff finding identified a graph-image build
+  failure that stopped ordinary review. The optional build now continues on
+  failure before credentials are minted. A workflow regression failed before
+  the fix; an unavailable-image regression proves ordinary PASS with one model
+  call and UNAVAILABLE telemetry. The full Linux suite was rerun successfully.
+  Independent re-review found no remaining material issue and passed 62 tests
+  across five files; the real restricted graph fixture passed again.
 - Operational acceptance still requires private App registration and installation,
   gateway HTTPS deployment, persistent storage, separate App keys, central
   variables/secrets and a real installed-App zero-config E2E. Public admission,

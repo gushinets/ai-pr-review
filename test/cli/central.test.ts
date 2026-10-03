@@ -262,7 +262,10 @@ it.each([
   },
 );
 
-async function prepareFixtureGraph(fixture: Awaited<ReturnType<typeof graphFixture>>) {
+async function prepareFixtureGraph(
+  fixture: Awaited<ReturnType<typeof graphFixture>>,
+  exitCode = 0,
+) {
   return prepareGraphEvidence(
     {
       targetRoot: join(fixture.workDir, "private/review-root/target"),
@@ -271,7 +274,7 @@ async function prepareFixtureGraph(fixture: Awaited<ReturnType<typeof graphFixtu
     },
     {
       run: async () => ({
-        exitCode: 0,
+        exitCode,
         stderr: "",
         stdout: JSON.stringify({
           version: "1.6.1",
@@ -313,41 +316,48 @@ it("resolves graph success before a model removes the optional manifest", async 
   expect(fixture.dependencies.engine.fresh).toHaveBeenCalledTimes(1);
 });
 
-it.each(["unreadable manifest", "artifact write failure", "real preprocessing failure"] as const)(
-  "keeps a paid review after %s",
-  async (condition) => {
-    const fixture = await graphFixture("codegraph", "PASS");
-    if (condition === "unreadable manifest") {
-      await mkdir(fixture.manifestPath, { recursive: true });
-    } else if (condition === "artifact write failure") {
-      await mkdir(fixture.graphRoot, { recursive: true });
-      expect(await prepareFixtureGraph(fixture)).toMatchObject({
-        status: "failed",
-        failure_code: "ARTIFACT_IO",
-      });
-      await expect(readFile(fixture.manifestPath)).rejects.toThrow();
-    } else {
-      // A bounded source failure stops preprocessing before any external process is started.
-      await writeFile(
-        join(fixture.workDir, "private/review-root/target/large.ts"),
-        "x".repeat(GRAPH_BOUNDS.file_bytes + 1),
-      );
-      expect(await runCentralCli(["graph"], fixture.env, fixture.dependencies)).toBe(0);
-    }
-    expect(await runCentralCli(["execute"], fixture.env, fixture.dependencies)).toBe(0);
-    const state = parseReviewState(
-      await readFile(join(fixture.workDir, "out/ai-review-state-v1.json"), "utf8"),
-    );
-    expect(state.outcome).toBe("PASS");
-    expect(state.telemetry.graph).toEqual({
-      mode: "codegraph",
+it.each([
+  ["unreadable manifest", "ARTIFACT_IO"],
+  ["artifact write failure", "ARTIFACT_IO"],
+  ["real preprocessing failure", "INPUT_LIMIT"],
+  ["graph image unavailable", "UNAVAILABLE"],
+] as const)("keeps a paid review after %s", async (condition, failureCode) => {
+  const fixture = await graphFixture("codegraph", "PASS");
+  if (condition === "unreadable manifest") {
+    await mkdir(fixture.manifestPath, { recursive: true });
+  } else if (condition === "artifact write failure") {
+    await mkdir(fixture.graphRoot, { recursive: true });
+    expect(await prepareFixtureGraph(fixture)).toMatchObject({
       status: "failed",
-      failure_code: condition === "real preprocessing failure" ? "INPUT_LIMIT" : "ARTIFACT_IO",
+      failure_code: "ARTIFACT_IO",
     });
-    expect(fixture.dependencies.engine.fresh).toHaveBeenCalledTimes(1);
-    expect(await runCentralCli(["verify"], fixture.env, fixture.dependencies)).toBe(0);
-  },
-);
+    await expect(readFile(fixture.manifestPath)).rejects.toThrow();
+  } else if (condition === "graph image unavailable") {
+    expect(await prepareFixtureGraph(fixture, 125)).toMatchObject({
+      status: "failed",
+      failure_code: "UNAVAILABLE",
+    });
+  } else {
+    // A bounded source failure stops preprocessing before any external process is started.
+    await writeFile(
+      join(fixture.workDir, "private/review-root/target/large.ts"),
+      "x".repeat(GRAPH_BOUNDS.file_bytes + 1),
+    );
+    expect(await runCentralCli(["graph"], fixture.env, fixture.dependencies)).toBe(0);
+  }
+  expect(await runCentralCli(["execute"], fixture.env, fixture.dependencies)).toBe(0);
+  const state = parseReviewState(
+    await readFile(join(fixture.workDir, "out/ai-review-state-v1.json"), "utf8"),
+  );
+  expect(state.outcome).toBe("PASS");
+  expect(state.telemetry.graph).toEqual({
+    mode: "codegraph",
+    status: "failed",
+    failure_code: failureCode,
+  });
+  expect(fixture.dependencies.engine.fresh).toHaveBeenCalledTimes(1);
+  expect(await runCentralCli(["verify"], fixture.env, fixture.dependencies)).toBe(0);
+});
 it.each(["token-read", "token-publish"])(
   "mints repository-scoped %s for a trusted internal request",
   async (phase) => {

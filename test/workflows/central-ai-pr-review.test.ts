@@ -20,6 +20,15 @@ it("dispatches centrally and keeps model, App and publication credentials in sep
   );
   expect(workflow.jobs.review.permissions["pull-requests"]).toBeUndefined();
   const steps = workflow.jobs.review.steps;
+  const graphBuild = steps.find(
+    (step: { name?: string }) =>
+      step.name === "Build pinned graph processor before credentials are minted",
+  );
+  expect(graphBuild.if).toBe("matrix.graph_arm == 'codegraph'");
+  expect(graphBuild["continue-on-error"]).toBe(true);
+  expect(steps.indexOf(graphBuild)).toBeLessThan(
+    steps.findIndex((step: { id?: string }) => step.id === "read-token"),
+  );
   const model = steps.find((step: { id?: string }) => step.id === "execute");
   expect(model.env.QWEN_TOKEN_PLAN_API_KEY).toBeDefined();
   expect(model.env.GITHUB_APP_PRIVATE_KEY).toBeUndefined();
