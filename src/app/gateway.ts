@@ -8,6 +8,7 @@ export interface AppReviewRequest {
   prNumber: number;
   baseSha: string;
   headSha: string;
+  engineSha: string;
   baseBranch: string;
   trigger: {
     kind: "app";
@@ -29,6 +30,7 @@ export interface AppPullRequest {
   baseBranch: string;
 }
 export interface AppGitHubGateway {
+  resolveEngine(): Promise<string>;
   resolveTarget(
     repository: string,
     installationId: number,
@@ -123,12 +125,20 @@ export async function handleWebhook(
     !pr.baseBranch
   )
     return { status: "TARGET_REJECTED" };
+  let engineSha: string;
+  try {
+    engineSha = await deps.github.resolveEngine();
+    if (!/^[0-9a-f]{40}$/.test(engineSha)) throw new Error();
+  } catch {
+    return { status: "CENTRAL_REJECTED" };
+  }
   const request: AppReviewRequest = {
     schema_version: 2,
     repository: pr.repository,
     prNumber: pr.number,
     baseSha: pr.baseSha.toLowerCase(),
     headSha: pr.headSha.toLowerCase(),
+    engineSha,
     baseBranch: pr.baseBranch,
     trigger: {
       kind: "app",

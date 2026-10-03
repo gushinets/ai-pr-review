@@ -7,6 +7,7 @@ export const request = {
   prNumber: 7,
   baseSha: "b".repeat(40),
   headSha: "a".repeat(40),
+  engineSha: "e".repeat(40),
   baseBranch: "main",
   trigger: {
     kind: "app",
@@ -22,6 +23,15 @@ export const request = {
 it("accepts an exact transport independent request", () => {
   expect(parseReviewRequest(JSON.stringify(request))).toEqual(request);
 });
+it("requires a trusted engine commit for App requests and permits internal resolution", () => {
+  const { engineSha: _engineSha, ...unpinned } = request;
+  expect(() => parseReviewRequest(JSON.stringify(unpinned))).toThrow("INVALID_REVIEW_REQUEST");
+  expect(
+    parseReviewRequest(
+      JSON.stringify({ ...unpinned, trigger: { kind: "internal", actor: "maintainer" } }),
+    ).engineSha,
+  ).toBeUndefined();
+});
 it("accepts GitHub's dot-prefixed repository names", () => {
   expect(
     parseReviewRequest(JSON.stringify({ ...request, repository: "owner/.github" })).repository,
@@ -31,6 +41,7 @@ it.each([
   { ...request, repository: "../repo" },
   { ...request, repository: "owner/.." },
   { ...request, headSha: "moving-branch" },
+  { ...request, engineSha: "moving-branch" },
   { ...request, trigger: { ...request.trigger, installationId: 0 } },
   { ...request, extra: "ignored" },
   { ...request, graphMode: "mcp" },

@@ -1,6 +1,7 @@
 import { sign } from "node:crypto";
 import { Octokit } from "@octokit/rest";
 import type { AppGitHubGateway } from "./gateway.js";
+import { requirePrivateExecutionRepository } from "./execution-repository.js";
 export interface AppCredentials {
   appId: string;
   privateKey: string;
@@ -48,7 +49,7 @@ const phasePermissions: Record<Phase, Permissions> = {
     actions: "read",
   },
   publish: { metadata: "read", pull_requests: "write", checks: "write" },
-  dispatch: { metadata: "read", actions: "write" },
+  dispatch: { metadata: "read", contents: "read", actions: "write" },
   inspect: { metadata: "read", actions: "read" },
 };
 
@@ -222,7 +223,34 @@ export function createAppGitHubGateway(
     )
   )
     throw new Error("CENTRAL_DISPATCH_CONFIG_INVALID");
+  async function centralClient(): Promise<Octokit> {
+    const verified = await installation(central.credentials, central.repository, options);
+    const token = await mint(verified, central.repository, "dispatch", options);
+    const github = client(token, options);
+    try {
+      const repository = await requirePrivateExecutionRepository(github, central.repository);
+      if (
+        !Number.isSafeInteger(repository.id) ||
+        repository.id <= 0 ||
+        repository.default_branch !== central.ref
+      )
+        throw new Error();
+    } catch {
+      throw new Error("CENTRAL_REPOSITORY_REJECTED");
+    }
+    return github;
+  }
   return {
+    async resolveEngine() {
+      const github = await centralClient();
+      try {
+        const { data } = await github.rest.repos.getCommit({ ...centralParams, ref: central.ref });
+        if (!/^[0-9a-f]{40}$/.test(data.sha)) throw new Error();
+        return data.sha;
+      } catch {
+        throw new Error("CENTRAL_ENGINE_REJECTED");
+      }
+    },
     async resolveTarget(repository, installationId, prNumber, actor) {
       const verified = await installation(credentials, repository, options, installationId);
       requirePermissions(verified.data.permissions ?? {}, {
@@ -254,10 +282,9 @@ export function createAppGitHubGateway(
       };
     },
     async dispatch(request) {
-      const verified = await installation(central.credentials, central.repository, options);
-      const token = await mint(verified, central.repository, "dispatch", options);
+      const github = await centralClient();
       try {
-        await client(token, options).rest.actions.createWorkflowDispatch({
+        await github.rest.actions.createWorkflowDispatch({
           ...centralParams,
           workflow_id: central.workflow,
           ref: central.ref,

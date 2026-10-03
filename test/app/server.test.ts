@@ -24,6 +24,9 @@ async function fixture() {
     completionSecret: "completion-secret",
     ledger,
     github: {
+      async resolveEngine() {
+        return "e".repeat(40);
+      },
       async resolveTarget() {
         throw new Error("PRIVATE-KEY-and-token");
       },
@@ -130,6 +133,7 @@ describe("bounded webhook HTTP runtime", () => {
       prNumber: 5,
       baseSha: "a".repeat(40),
       headSha: "b".repeat(40),
+      engineSha: "e".repeat(40),
     };
     f.deps.ledger.claim("delivery-1", identity, 71);
     const body = JSON.stringify({ ...identity, deliveryId: "delivery-1", outcome: "retryable" });

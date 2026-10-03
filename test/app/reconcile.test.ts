@@ -27,6 +27,7 @@ async function fixture() {
     prNumber: 1,
     baseSha: "a".repeat(40),
     headSha: "b".repeat(40),
+    engineSha: "e".repeat(40),
   };
   ledger.claim("delivery-1", identity, 1);
   ledger.recordDispatch("delivery-1", "dispatched");

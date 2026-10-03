@@ -2,7 +2,7 @@ import { createReadStream } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { runCentralCli } from "../../src/cli/central.js";
 import * as appAuth from "../../src/app/github-app.js";
 import type { ReviewStateV1 } from "../../src/contracts/review-state.js";
@@ -25,8 +25,23 @@ const internalRequest = {
   graphMode: "off",
   execution: "canonical",
 };
+beforeEach(() => {
+  vi.stubGlobal(
+    "fetch",
+    async () =>
+      new Response(
+        JSON.stringify({
+          full_name: "operator/private-execution",
+          private: true,
+          visibility: "private",
+        }),
+        { headers: { "content-type": "application/json" } },
+      ),
+  );
+});
 afterEach(async () => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   vi.unstubAllEnvs();
   await Promise.all(temps.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
@@ -40,6 +55,8 @@ async function graphFixture(mode: "off" | "codegraph", outcome: "PASS" | "BLOCK"
     RUNNER_TEMP: directory,
     GITHUB_OUTPUT: join(directory, "output"),
     ENGINE_SHA: "e".repeat(40),
+    EXECUTION_REPOSITORY_PRIVATE: "true",
+    STATE_REPOSITORY: "operator/private-execution",
     REVIEW_REQUEST: JSON.stringify(request),
   };
   const github = {
@@ -106,7 +123,13 @@ async function graphFixture(mode: "off" | "codegraph", outcome: "PASS" | "BLOCK"
         ? { kind: "reuse", state: canonical }
         : { kind: "fresh", previous: null, history: [], rerunnable: null },
   };
-  expect(await runCentralCli(["prepare"], env, dependencies)).toBe(0);
+  expect(
+    await runCentralCli(
+      ["prepare"],
+      { ...env, STATE_READ_TOKEN: "central-read-canary" },
+      dependencies,
+    ),
+  ).toBe(0);
   expect(await readFile(env.GITHUB_OUTPUT, "utf8")).toContain("action=EXECUTE");
   const workDir = join(directory, "ai-pr-review");
   const graphRoot = join(workDir, "private/review-root/evidence/graph");
@@ -237,7 +260,13 @@ it.each([
     expect(state.telemetry.graph).toEqual({ mode, status, failure_code: code });
     expect(fixture.dependencies.engine.fresh).toHaveBeenCalledTimes(1);
     expect(fixture.dependencies.engine.resume).not.toHaveBeenCalled();
-    expect(await runCentralCli(["verify"], fixture.env, fixture.dependencies)).toBe(0);
+    expect(
+      await runCentralCli(
+        ["verify"],
+        { ...fixture.env, STATE_READ_TOKEN: "central-read-canary" },
+        fixture.dependencies,
+      ),
+    ).toBe(0);
     expect(
       JSON.parse(await readFile(join(fixture.workDir, "experiment/telemetry.json"), "utf8")),
     ).toMatchObject({
@@ -249,6 +278,7 @@ it.each([
     fixture.reuse(state);
     const rerun = {
       ...fixture.env,
+      STATE_READ_TOKEN: "central-read-canary",
       RUNNER_TEMP: await mkdtemp(join(tmpdir(), "central-graph-reuse-")),
     };
     temps.push(rerun.RUNNER_TEMP);
@@ -356,7 +386,13 @@ it.each([
     failure_code: failureCode,
   });
   expect(fixture.dependencies.engine.fresh).toHaveBeenCalledTimes(1);
-  expect(await runCentralCli(["verify"], fixture.env, fixture.dependencies)).toBe(0);
+  expect(
+    await runCentralCli(
+      ["verify"],
+      { ...fixture.env, STATE_READ_TOKEN: "central-read-canary" },
+      fixture.dependencies,
+    ),
+  ).toBe(0);
 });
 it.each(["token-read", "token-publish"])(
   "mints repository-scoped %s for a trusted internal request",
@@ -371,6 +407,7 @@ it.each(["token-read", "token-publish"])(
     });
     expect(
       await runCentralCli([phase], {
+        EXECUTION_REPOSITORY_PRIVATE: "true",
         REVIEW_REQUEST: JSON.stringify(internalRequest),
         GITHUB_APP_ID: "1",
         GITHUB_APP_PRIVATE_KEY: "fake-key",
@@ -389,59 +426,96 @@ it.each(["token-read", "token-publish"])(
 it("internal requests require no gateway callback or completion secret", async () => {
   const fetch = vi.spyOn(globalThis, "fetch");
   expect(
-    await runCentralCli(["complete"], { REVIEW_REQUEST: JSON.stringify(internalRequest) }),
+    await runCentralCli(["complete"], {
+      REVIEW_REQUEST: JSON.stringify(internalRequest),
+      EXECUTION_REPOSITORY_PRIVATE: "true",
+    }),
   ).toBe(0);
   expect(fetch).not.toHaveBeenCalled();
 });
-it("publication failure releases a claim despite canonical upload, without discarding state", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "central-complete-"));
-  temps.push(directory);
-  const request = {
-    schema_version: 2,
-    repository: "o/r",
-    prNumber: 1,
-    baseSha: "b".repeat(40),
-    headSha: "a".repeat(40),
-    baseBranch: "main",
-    trigger: {
-      kind: "app",
-      actor: "owner",
-      installationId: 1,
-      commentId: 1,
-      deliveryId: "delivery-1",
-    },
-    requirementsSource: { kind: "none" },
-    graphMode: "off",
-    execution: "canonical",
-  };
-  const bodies: unknown[] = [];
-  vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
-    bodies.push(JSON.parse(String(init?.body)));
-    expect(init?.signal).toBeDefined();
-    return new Response(JSON.stringify({ status: "COMPLETION_RECORDED" }), {
-      headers: { "content-type": "application/json" },
-    });
-  });
-  const env = {
-    RUNNER_TEMP: directory,
-    REVIEW_REQUEST: JSON.stringify(request),
-    AI_REVIEW_COMPLETION_SECRET: "callback-canary",
-    AI_REVIEW_GATEWAY_URL: "https://gateway.example",
-    CANONICAL_UPLOADED: "true",
-    PUBLICATION_SUCCEEDED: "false",
-  };
-  expect(await runCentralCli(["complete"], env)).toBe(0);
-  expect(bodies).toEqual([
-    {
-      deliveryId: "delivery-1",
+it.each(["publication failure", "engine drift"])(
+  "%s releases the original engine claim without reading canonical state",
+  async (failure) => {
+    const directory = await mkdtemp(join(tmpdir(), "central-complete-"));
+    temps.push(directory);
+    const request = {
+      schema_version: 2,
+      engineSha: "e".repeat(40),
       repository: "o/r",
       prNumber: 1,
-      baseSha: request.baseSha,
-      headSha: request.headSha,
-      outcome: "retryable",
-    },
-  ]);
-});
+      baseSha: "b".repeat(40),
+      headSha: "a".repeat(40),
+      baseBranch: "main",
+      trigger: {
+        kind: "app",
+        actor: "owner",
+        installationId: 1,
+        commentId: 1,
+        deliveryId: "delivery-1",
+      },
+      requirementsSource: { kind: "none" },
+      graphMode: "off",
+      execution: "canonical",
+    };
+    const bodies: unknown[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, init) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      expect(init?.signal).toBeDefined();
+      return new Response(JSON.stringify({ status: "COMPLETION_RECORDED" }), {
+        headers: { "content-type": "application/json" },
+      });
+    });
+    const env = {
+      RUNNER_TEMP: directory,
+      ENGINE_SHA: failure === "engine drift" ? "f".repeat(40) : request.engineSha,
+      EXECUTION_REPOSITORY_PRIVATE: "true",
+      REVIEW_REQUEST: JSON.stringify(request),
+      AI_REVIEW_COMPLETION_SECRET: "callback-canary",
+      AI_REVIEW_GATEWAY_URL: "https://gateway.example",
+      CANONICAL_UPLOADED: "true",
+      PUBLICATION_SUCCEEDED: failure === "engine drift" ? "true" : "false",
+    };
+    expect(await runCentralCli(["complete"], env)).toBe(0);
+    expect(bodies).toEqual([
+      {
+        deliveryId: "delivery-1",
+        repository: "o/r",
+        prNumber: 1,
+        baseSha: request.baseSha,
+        headSha: request.headSha,
+        engineSha: request.engineSha,
+        outcome: "retryable",
+      },
+    ]);
+  },
+);
+it.each(["token-read", "token-publish", "prepare", "graph", "execute", "verify", "publish"])(
+  "rejects %s when the dispatched engine moved before execution",
+  async (phase) => {
+    const mint = vi.spyOn(appAuth, "mintInstallationToken");
+    const fetch = vi.spyOn(globalThis, "fetch");
+    const request = {
+      ...internalRequest,
+      engineSha: "e".repeat(40),
+      trigger: {
+        kind: "app",
+        actor: "owner",
+        installationId: 1,
+        commentId: 1,
+        deliveryId: "drift-delivery",
+      },
+    };
+    expect(
+      await runCentralCli([phase], {
+        EXECUTION_REPOSITORY_PRIVATE: "true",
+        ENGINE_SHA: "f".repeat(40),
+        REVIEW_REQUEST: JSON.stringify(request),
+      }),
+    ).toBe(70);
+    expect(mint).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+  },
+);
 it.each([
   ["prepare", "QWEN_TOKEN_PLAN_API_KEY"],
   ["prepare", "GITHUB_APP_PRIVATE_KEY"],
@@ -468,6 +542,7 @@ it.each([
     await runCentralCli([phase!], {
       RUNNER_TEMP: directory,
       ENGINE_SHA: "e".repeat(40),
+      EXECUTION_REPOSITORY_PRIVATE: "true",
       REVIEW_REQUEST: JSON.stringify({
         schema_version: 2,
         repository: "o/r",

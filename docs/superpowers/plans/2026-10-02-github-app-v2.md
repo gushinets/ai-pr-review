@@ -111,3 +111,17 @@ GitHub Actions and pinned CodeGraph in a bounded Linux container.
   gateway HTTPS deployment, persistent storage, separate App keys, central
   variables/secrets and a real installed-App zero-config E2E. Public admission,
   quotas and billing remain future work.
+
+## Additional review at e080280
+
+- [x] Require a private execution/state repository before App dispatch and for
+      internal experiments. Validate trusted workflow repository metadata before
+      credentials, and live metadata before preparation and artifact upload.
+      Document private deployment and restrict readers to authorized operators.
+- [x] Scope command claims and signed completion to the actual trusted engine
+      SHA. Retain same-engine completed deduplication, in-flight claims and
+      comment/delivery tombstones. Bind legacy completed claims only through
+      explicit operator migration with independently verified engine evidence.
+- [x] Add regressions, run full Linux checks/build and restricted graph fixture,
+      rebuild/start gateway, independently review the complete diff, push scoped
+      fixes and resolve the two new review threads with evidence. Do not merge.

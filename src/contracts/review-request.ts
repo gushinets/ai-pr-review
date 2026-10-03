@@ -7,6 +7,7 @@ export interface ReviewRequest {
   prNumber: number;
   baseSha: string;
   headSha: string;
+  engineSha?: string;
   baseBranch: string;
   trigger:
     | { kind: "app"; actor: string; installationId: number; commentId: number; deliveryId: string }
@@ -30,6 +31,7 @@ export const ReviewRequestSchema = Type.Object(
     prNumber: id,
     baseSha: sha,
     headSha: sha,
+    engineSha: Type.Optional(sha),
     baseBranch: Type.String({ minLength: 1, maxLength: 255 }),
     trigger: Type.Union([
       Type.Object(
@@ -72,6 +74,7 @@ export function parseReviewRequest(source: string): ReviewRequest {
           : []),
       ].every(Number.isSafeInteger) ||
       /[\p{Cc}\p{Cf}]/u.test(request.baseBranch) ||
+      (request.trigger.kind === "app" && !request.engineSha) ||
       [".", ".."].includes(request.repository.split("/")[1]!) ||
       (request.execution === "shadow" && !request.experimentId)
     )

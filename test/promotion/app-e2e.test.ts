@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Readable } from "node:stream";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { SqliteCommandLedger } from "../../src/app/command-ledger.js";
 import { handleWebhook } from "../../src/app/gateway.js";
 import { handleCompletion } from "../../src/app/completion.js";
@@ -19,7 +19,23 @@ import { parseReviewState } from "../../src/state/review-state.js";
 import type { StateDiscovery } from "../../src/state/github-artifact-store.js";
 
 const temps: string[] = [];
+beforeEach(() => {
+  vi.stubGlobal(
+    "fetch",
+    async () =>
+      new Response(
+        JSON.stringify({
+          full_name: "operator/private-execution",
+          private: true,
+          visibility: "private",
+        }),
+        { headers: { "content-type": "application/json" } },
+      ),
+  );
+});
 afterEach(async () => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   vi.unstubAllEnvs();
   await Promise.all(temps.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
@@ -30,9 +46,9 @@ it("fake installed App → missing graph artifact → central BLOCK → correcti
   vi.stubEnv("QWEN_TOKEN_PLAN_API_KEY", "sk-sp-test-provider");
   vi.stubEnv("GITHUB_APP_PRIVATE_KEY", "app-private-key-canary");
   vi.stubEnv("LINEAR_CLIENT_SECRET", "linear-secret-canary");
-  const base = "b".repeat(40),
-    engineSha = "e".repeat(40);
-  let head = "a".repeat(40),
+  const base = "b".repeat(40);
+  let engineSha = "e".repeat(40),
+    head = "a".repeat(40),
     canonical: ReviewStateV1 | null = null;
   const requests: ReviewRequest[] = [];
   const bad = "export function subtract(a: number, b: number) { return a + b; }\n";
@@ -73,6 +89,7 @@ it("fake installed App → missing graph artifact → central BLOCK → correcti
         ledger,
         github: {
           resolveTarget: async () => pr(),
+          resolveEngine: async () => engineSha,
           dispatch: async (request) => {
             requests.push(request);
           },
@@ -174,7 +191,8 @@ it("fake installed App → missing graph artifact → central BLOCK → correcti
     },
   };
   const loadState = async (): Promise<StateDiscovery> =>
-    canonical?.attempt_identity.head_sha === head
+    canonical?.attempt_identity.head_sha === head &&
+    canonical.attempt_identity.engine_sha === engineSha
       ? { kind: "reuse", state: canonical }
       : {
           kind: "fresh",
@@ -191,6 +209,8 @@ it("fake installed App → missing graph artifact → central BLOCK → correcti
       RUNNER_TEMP: runner,
       GITHUB_OUTPUT: output,
       ENGINE_SHA: engineSha,
+      EXECUTION_REPOSITORY_PRIVATE: "true",
+      STATE_REPOSITORY: "operator/private-execution",
       REVIEW_REQUEST: JSON.stringify(request),
     };
     const dependencies = { github, engine, publisher, loadState };
@@ -218,7 +238,7 @@ it("fake installed App → missing graph artifact → central BLOCK → correcti
     expect(
       await runCentralCli(
         ["verify"],
-        { ...common, TARGET_READ_TOKEN: "read-canary" },
+        { ...common, TARGET_READ_TOKEN: "read-canary", STATE_READ_TOKEN: "state-canary" },
         dependencies,
       ),
     ).toBe(0);
@@ -250,6 +270,7 @@ it("fake installed App → missing graph artifact → central BLOCK → correcti
           prNumber: request.prNumber,
           baseSha: request.baseSha,
           headSha: request.headSha,
+          engineSha: request.engineSha,
           outcome: "completed",
         }),
       );
@@ -290,9 +311,16 @@ it("fake installed App → missing graph artifact → central BLOCK → correcti
     expect(checks).toHaveLength(2);
     expect((await command(3)).status).toBe("DUPLICATE_COMMAND");
     expect(modelCalls).toBe(2);
-    await review({ ...requests[1]!, execution: "shadow", experimentId: "same-head-comparison" }, 3);
+    engineSha = "f".repeat(40);
+    expect((await command(4)).status).toBe("DISPATCHED");
+    const upgraded = await review(requests[2]!, 3);
+    expect(upgraded.outcome).toBe("PASS");
+    expect(upgraded.attempt_identity.engine_sha).toBe(engineSha);
     expect(modelCalls).toBe(3);
-    expect(checks).toHaveLength(2);
+    expect((await command(5)).status).toBe("DUPLICATE_COMMAND");
+    await review({ ...requests[2]!, execution: "shadow", experimentId: "same-head-comparison" }, 4);
+    expect(modelCalls).toBe(4);
+    expect(checks).toHaveLength(3);
   } finally {
     ledger.close();
   }
@@ -301,6 +329,7 @@ it("fake installed App → missing graph artifact → central BLOCK → correcti
 it("comparison arms keep exact identity and remain shadows even when production state exists", () => {
   const request = {
     schema_version: 2,
+    engineSha: "e".repeat(40),
     repository: "o/r",
     prNumber: 1,
     baseSha: "b".repeat(40),

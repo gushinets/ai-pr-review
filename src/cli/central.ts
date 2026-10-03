@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import { createHmac } from "node:crypto";
 import { Octokit } from "@octokit/rest";
 import { getAppIdentity, mintInstallationToken } from "../app/github-app.js";
+import { requirePrivateExecutionRepository } from "../app/execution-repository.js";
 import { parseReviewRequest, type ReviewRequest } from "../contracts/review-request.js";
 import { createGitHubClient, type GithubReadClient } from "../github/github-client.js";
 import { createGitHubPublisher, type GitHubPublisher } from "../github/publisher.js";
@@ -91,7 +92,6 @@ const forbiddenByPhase: Record<Phase, string[]> = {
     "LINEAR_CLIENT_ID",
     "LINEAR_CLIENT_SECRET",
     "TARGET_WRITE_TOKEN",
-    "STATE_READ_TOKEN",
   ],
   publish: [
     "QWEN_TOKEN_PLAN_API_KEY",
@@ -169,6 +169,7 @@ export async function runCentralCli(
     if (
       args.length !== 1 ||
       !Object.hasOwn(forbiddenByPhase, phase) ||
+      env.EXECUTION_REPOSITORY_PRIVATE !== "true" ||
       forbiddenByPhase[phase].some((key) => env[key] !== undefined) ||
       [
         "QWEN_API_KEY",
@@ -182,6 +183,8 @@ export async function runCentralCli(
     )
       return 70;
     const request = centralRequest(env);
+    if (phase !== "complete" && request.engineSha && request.engineSha !== env.ENGINE_SHA)
+      return 70;
     if (phase === "complete") {
       if (request.execution === "shadow" || request.trigger.kind === "internal") return 0;
       if (
@@ -194,11 +197,19 @@ export async function runCentralCli(
       const endpoint = new URL("/completion", env.AI_REVIEW_GATEWAY_URL);
       if (endpoint.protocol !== "https:" || endpoint.username || endpoint.password) return 70;
       let outcome = "retryable";
-      if (env.CANONICAL_UPLOADED === "true" && env.PUBLICATION_SUCCEEDED === "true") {
+      if (
+        env.CANONICAL_UPLOADED === "true" &&
+        env.PUBLICATION_SUCCEEDED === "true" &&
+        request.engineSha === env.ENGINE_SHA
+      ) {
         const state = parseReviewState(
           await readOwned(join(env.RUNNER_TEMP, "ai-pr-review"), `out/${STATE_FILE_NAME}`),
         );
-        if (state.outcome === "PASS" || state.outcome === "BLOCK") outcome = "completed";
+        if (
+          state.attempt_identity.engine_sha === request.engineSha &&
+          (state.outcome === "PASS" || state.outcome === "BLOCK")
+        )
+          outcome = "completed";
       }
       const body = JSON.stringify({
         deliveryId: request.trigger.deliveryId,
@@ -206,6 +217,7 @@ export async function runCentralCli(
         prNumber: request.prNumber,
         baseSha: request.baseSha,
         headSha: request.headSha,
+        engineSha: request.engineSha,
         outcome,
       });
       const response = await fetch(endpoint, {
@@ -256,6 +268,11 @@ export async function runCentralCli(
       return 70;
     const workDir = join(env.RUNNER_TEMP, "ai-pr-review");
     await assertCreatablePathContained(env.RUNNER_TEMP, workDir);
+    if (phase === "prepare" || phase === "verify")
+      await requirePrivateExecutionRepository(
+        transport(env.STATE_READ_TOKEN),
+        env.STATE_REPOSITORY ?? "",
+      );
     await mkdir(workDir, { recursive: true, mode: 0o700 });
     if ((await lstat(workDir)).isSymbolicLink()) return 70;
     const stateFile = `out/${STATE_FILE_NAME}`;

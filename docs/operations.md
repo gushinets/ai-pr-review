@@ -8,23 +8,30 @@ workflow, provider secret, Linear credential, PAT or config is required.
 
 The following production setup requires the account owner:
 
-1. Register the private target App using `app/manifest.json`, replacing the homepage and webhook
+1. Create a **private execution repository** containing the trusted engine and
+   `.github/workflows/central-ai-pr-review.yml`. Use its protected default branch
+   for V2. This public source repository cannot be the V2 execution/state repository.
+   Restrict its readers to operators authorized to see every pilot target's review
+   findings and shadow data. Artifacts/logs inherit that repository's read access;
+   sanitization does not remove source-derived evidence. Keep it private while
+   private review artifacts or logs remain; do not change its visibility during runs.
+2. Register the private target App using `app/manifest.json`, replacing the homepage and webhook
    placeholders with operator URLs. Generate its private key and webhook secret.
    Install it on selected pilot repositories owned by the App's account/organization.
    A private App cannot be installed on unrelated customer accounts. Register a
    **different private dispatcher App** using `app/dispatch-manifest.json` and
    install it only on the central execution repository. Generate a separate key.
-2. Deploy `app/Dockerfile` behind HTTPS. Mount a persistent, private `/data`
+3. Deploy `app/Dockerfile` behind HTTPS. Mount a persistent, private `/data`
    volume for SQLite; preserve it across gateway restarts. Configure the gateway
    variables below. Forward POST `/webhook` and POST `/completion`; do not expose
    the ledger or private key. Set GitHub's webhook URL to `/webhook`.
-3. Protect the central default branch. Set repository variable `AI_REVIEW_APP_ID`
+4. Protect the private execution repository's default branch. Set repository variable `AI_REVIEW_APP_ID`
    and `AI_REVIEW_GATEWAY_URL` (the HTTPS origin). Set central secrets
    `AI_REVIEW_APP_PRIVATE_KEY`, `QWEN_TOKEN_PLAN_API_KEY` and
    `AI_REVIEW_COMPLETION_SECRET`. The completion secret must match the gateway.
    Optional Linear experiments also need `LINEAR_CLIENT_ID` and
    `LINEAR_CLIENT_SECRET`. Consumers store none of these.
-4. Complete the live acceptance sequence below before retiring V1 or changing
+5. Complete the live acceptance sequence below before retiring V1 or changing
    merge rules. This implementation does not register an App, deploy production,
    provision secrets or claim that live acceptance has passed.
 
@@ -33,19 +40,19 @@ Gateway environment:
 Keep the central dispatcher's credentials only on the gateway /
 operator host, never in central review jobs. Prefer private mounted PEM files.
 
-| Variable                                                                    | Purpose                                                            |
-| --------------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| `GITHUB_APP_ID`                                                             | Registered target App's numeric ID                                 |
-| `GITHUB_APP_PRIVATE_KEY` or `GITHUB_APP_PRIVATE_KEY_FILE`                   | Target App PEM key; prefer a private mounted file                  |
-| `GITHUB_DISPATCH_APP_ID`                                                    | Required central dispatcher App ID; different from target App ID   |
-| `GITHUB_DISPATCH_APP_PRIVATE_KEY` or `GITHUB_DISPATCH_APP_PRIVATE_KEY_FILE` | Required central dispatcher PEM key; prefer a private mounted file |
-| `GITHUB_WEBHOOK_SECRET`                                                     | Raw webhook HMAC verification                                      |
-| `AI_REVIEW_COMPLETION_SECRET`                                               | Independent HMAC key for central completion callbacks              |
-| `AI_REVIEW_CENTRAL_REPOSITORY`                                              | Execution repository, e.g. `gushinets/ai-pr-review`                |
-| `AI_REVIEW_CENTRAL_WORKFLOW`                                                | Optional; defaults to `central-ai-pr-review.yml`                   |
-| `AI_REVIEW_CENTRAL_REF`                                                     | Optional; defaults to `main`; must be the protected default branch |
-| `AI_REVIEW_LEDGER_PATH`                                                     | Persistent SQLite file, e.g. `/data/commands.sqlite`               |
-| `PORT`                                                                      | Optional; defaults to 3000                                         |
+| Variable                                                                    | Purpose                                                                    |
+| --------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `GITHUB_APP_ID`                                                             | Registered target App's numeric ID                                         |
+| `GITHUB_APP_PRIVATE_KEY` or `GITHUB_APP_PRIVATE_KEY_FILE`                   | Target App PEM key; prefer a private mounted file                          |
+| `GITHUB_DISPATCH_APP_ID`                                                    | Required central dispatcher App ID; different from target App ID           |
+| `GITHUB_DISPATCH_APP_PRIVATE_KEY` or `GITHUB_DISPATCH_APP_PRIVATE_KEY_FILE` | Required central dispatcher PEM key; prefer a private mounted file         |
+| `GITHUB_WEBHOOK_SECRET`                                                     | Raw webhook HMAC verification                                              |
+| `AI_REVIEW_COMPLETION_SECRET`                                               | Independent HMAC key for central completion callbacks                      |
+| `AI_REVIEW_CENTRAL_REPOSITORY`                                              | Required private execution repository, e.g. `OWNER/PRIVATE_EXECUTION_REPO` |
+| `AI_REVIEW_CENTRAL_WORKFLOW`                                                | Optional; defaults to `central-ai-pr-review.yml`                           |
+| `AI_REVIEW_CENTRAL_REF`                                                     | Optional; defaults to `main`; must be the protected default branch         |
+| `AI_REVIEW_LEDGER_PATH`                                                     | Persistent SQLite file, e.g. `/data/commands.sqlite`                       |
+| `PORT`                                                                      | Optional; defaults to 3000                                                 |
 
 Build the gateway from the repository root:
 
@@ -57,7 +64,7 @@ The gateway runs as `node` on Node 22.19.0. Give that user write access to the
 ledger directory. Back up SQLite consistently; do not delete command tombstones
 to retry reviews. A signed comment ID remains consumed even if its unsigned
 delivery header changes. Exact command claims also prevent simultaneous reviews
-of one base/head. Network ambiguity keeps the claim until reconciled; an operator
+of one base/head/engine. Network ambiguity keeps the claim until reconciled; an operator
 must inspect the central run before changing the ledger.
 
 ### App permissions and credential boundaries
@@ -65,19 +72,32 @@ must inspect the central run before changing the ledger.
 The target App needs metadata read, contents read, pull requests write, issues read,
 checks write, commit statuses read and **Actions read** for CI runs/jobs/logs.
 Issues read permits the issue-comment subscription; publication uses PR endpoints.
-The separate dispatcher App needs only metadata read and **Actions write**, only
+The separate dispatcher App needs metadata read, contents read (to resolve the
+trusted default-branch engine SHA) and **Actions write**, only
 on the central repository. No customer installation has Actions write; no broad
 PAT or issues write permission is used. Both manifests ship with `public: false`.
 
 Every installation token is narrowed to one verified repository. Read tokens
 receive metadata, contents, pull requests, checks, statuses and Actions read.
 Publisher tokens receive metadata read plus pull requests/checks write. Dispatch
-tokens use the dispatcher identity and receive metadata read and Actions write.
+tokens use the dispatcher identity and receive metadata/contents read and Actions write.
 Operator inspection narrows that identity further to metadata/Actions read. Installation identity, App
 ownership, repository access, permissions, suspension and token scope are checked
 through GitHub; no installation or user IDs are fixed in code.
 
+The gateway validates authenticated execution-repository metadata as private,
+requires the configured ref to equal its default branch and resolves that ref's
+40-character commit SHA before claiming a command. It checks private metadata
+again before dispatch. The workflow rejects public execution for every V2 job,
+including internal/manual experiments. Preparation and pre-upload verification
+also check live repository metadata with the scoped central read token.
+
 The central workflow checks out its exact engine SHA on the default branch.
+App requests pin that SHA: a branch advance before execution fails before target
+token minting or model calls and sends a retryable callback for the original
+engine claim. A new comment can then request the current engine. The actual
+checked-out SHA must match the request; requester-supplied versions cannot
+create arbitrary deduplication identities.
 Preparation receives only target read access, central artifact read access and
 optional Linear secrets. Execution receives a read token for stale validation
 and the provider key; the confined model subprocess receives only its isolated
@@ -126,9 +146,26 @@ After canonical upload and successful publication, a purpose-separated signed
 callback retains the gateway claim. A terminal execution/publication failure
 releases only that original identity claim, allowing a **new** `/ai-review`
 comment to retry. Signed comment/delivery tombstones remain, so replaying an old
-webhook or callback cannot release a later claim. If state was already persisted,
+webhook or callback cannot release a later claim. Signed callbacks bind the
+original engine SHA as well as delivery and target identity. A new trusted
+engine SHA allows a new comment on unchanged target code; another comment using
+the completed engine remains blocked even after artifact retention expires.
+If state was already persisted,
 publication recovery reuses it without rerolling. Callback failure requires
 operator reconciliation; retry the completion job after repairing HTTPS/secrets.
+
+For an existing gateway ledger from before engine-scoped claims, stop dispatch
+and freeze workflow reruns before upgrading. Legacy four-field claims hold every
+engine until reconciled; do not delete them. For each **completed** legacy claim,
+independently verify its engine SHA from a trusted matching workflow run and
+canonical state, then call the operator-only ledger API
+`bindLegacyCompletedEngine(ORIGINAL_DELIVERY_ID, VERIFIED_ENGINE_SHA)` using
+`SqliteCommandLedger` from `dist/src/app/command-ledger.js` against the persistent
+ledger. Back up the ledger consistently first. This transaction binds the
+completed claim and all associated delivery records to that engine, preserving
+comment/delivery tombstones. Active, ambiguous or unproven legacy claims remain
+held and use the existing reconciliation process. Deploy matching gateway and
+workflow versions before resuming; the new signed callback requires `engineSha`.
 
 ### Pending-run and dispatch recovery (operator only)
 
@@ -211,7 +248,7 @@ PR number and exact current base/head/baseBranch from GitHub. Set
 and `execution: "canonical"`; then dispatch both shadows:
 
 ```bash
-gh workflow run central-ai-pr-review.yml --repo gushinets/ai-pr-review \
+gh workflow run central-ai-pr-review.yml --repo OWNER/PRIVATE_EXECUTION_REPO \
   --ref main --field request="$(cat request.json)" --field compare=true
 ```
 
@@ -226,7 +263,8 @@ when testing that evidence; credentials still come only from central secrets.
 Run `test/promotion/app-e2e.test.ts` for the deterministic fake lifecycle first.
 It covers signed command, central engine orchestration, exact-head BLOCK,
 Check Run, stable summary, inline finding, correction, new command, blocker closure,
-PASS and same-head reuse. It uses fake credentials/models and is not a live run.
+PASS, same-engine deduplication, an engine upgrade on unchanged target code and
+private shadows. It uses fake credentials/models and is not a live run.
 
 On a real installed test repository with **no consumer workflow/config/secrets**:
 open the broken fixture PR, comment as a write collaborator, record signed webhook

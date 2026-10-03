@@ -5,13 +5,16 @@ export interface CommandIdentity {
   prNumber: number;
   baseSha: string;
   headSha: string;
+  engineSha: string;
 }
 function commandKey(identity: CommandIdentity): string {
+  if (!/^[0-9a-f]{40}$/.test(identity.engineSha)) throw new Error("ENGINE_SHA_INVALID");
   return JSON.stringify([
     identity.repository.toLowerCase(),
     identity.prNumber,
     identity.baseSha.toLowerCase(),
     identity.headSha.toLowerCase(),
+    identity.engineSha,
   ]);
 }
 
@@ -19,7 +22,8 @@ function commandKey(identity: CommandIdentity): string {
  * One durable volume is required. Claims never expire automatically: a crash or
  * dispatch timeout may have already started a billable run. The authenticated
  * terminal callback retains PASS/BLOCK snapshots and releases UNABLE/failed
- * commands for a NEW comment. Completed snapshots never become retryable.
+ * commands for a NEW comment. Completed snapshots never become retryable for
+ * their engine. Legacy snapshots hold every engine until explicitly bound.
  * Both signed comment IDs and delivery IDs survive release. Completion binds
  * the original delivery and exact snapshot, so old callbacks cannot release a
  * newer same-head command. For manual recovery, find the central run using its
@@ -89,18 +93,75 @@ export class SqliteCommandLedger {
           comment.changes === 0
             ? "DUPLICATE_COMMENT"
             : this.db
-                  .prepare(
-                    "INSERT INTO commands (command_key, delivery_id, status) VALUES (?, ?, 'claimed') ON CONFLICT DO NOTHING",
-                  )
-                  .run(key, delivery).changes !== 0
-              ? "CLAIMED"
-              : "DUPLICATE_COMMAND";
+                  .prepare("SELECT 1 FROM commands WHERE command_key = ?")
+                  .get(JSON.stringify(JSON.parse(key).slice(0, 4)))
+              ? "DUPLICATE_COMMAND"
+              : this.db
+                    .prepare(
+                      "INSERT INTO commands (command_key, delivery_id, status) VALUES (?, ?, 'claimed') ON CONFLICT DO NOTHING",
+                    )
+                    .run(key, delivery).changes !== 0
+                ? "CLAIMED"
+                : "DUPLICATE_COMMAND";
       }
       this.db.exec("COMMIT");
       return result;
     } catch (error) {
       this.db.exec("ROLLBACK");
       throw error;
+    }
+  }
+  /** Operator only: freeze dispatch and independently verify the historical
+   * engine from a trusted matching run/state before binding a legacy record.
+   * Active or ambiguous legacy commands remain held; no HTTP caller uses this.
+   */
+  bindLegacyCompletedEngine(delivery: string, verifiedEngineSha: string): void {
+    if (!/^[0-9a-f]{40}$/.test(verifiedEngineSha))
+      throw new Error("LEGACY_ENGINE_BINDING_REJECTED");
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const row = this.db
+        .prepare(
+          "SELECT c.command_key, c.status, d.command_key AS delivered_key FROM commands c JOIN deliveries d ON d.id = c.delivery_id WHERE c.delivery_id = ?",
+        )
+        .get(delivery);
+      if (
+        row?.status !== "completed" ||
+        typeof row.command_key !== "string" ||
+        row.command_key !== row.delivered_key
+      )
+        throw new Error();
+      const legacy: unknown = JSON.parse(row.command_key);
+      if (
+        !Array.isArray(legacy) ||
+        legacy.length !== 4 ||
+        typeof legacy[0] !== "string" ||
+        !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(legacy[0]) ||
+        !Number.isSafeInteger(legacy[1]) ||
+        legacy[1] <= 0 ||
+        typeof legacy[2] !== "string" ||
+        !/^[0-9a-f]{40}$/.test(legacy[2]) ||
+        typeof legacy[3] !== "string" ||
+        !/^[0-9a-f]{40}$/.test(legacy[3])
+      )
+        throw new Error();
+      const key = commandKey({
+        repository: legacy[0],
+        prNumber: legacy[1],
+        baseSha: legacy[2],
+        headSha: legacy[3],
+        engineSha: verifiedEngineSha,
+      });
+      this.db
+        .prepare("UPDATE commands SET command_key = ? WHERE delivery_id = ?")
+        .run(key, delivery);
+      this.db
+        .prepare("UPDATE deliveries SET command_key = ? WHERE command_key = ?")
+        .run(key, row.command_key);
+      this.db.exec("COMMIT");
+    } catch {
+      this.db.exec("ROLLBACK");
+      throw new Error("LEGACY_ENGINE_BINDING_REJECTED");
     }
   }
   recordDispatch(delivery: string, status: "dispatched" | "uncertain"): void {

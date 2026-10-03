@@ -47,6 +47,7 @@ const request = {
   prNumber: 5,
   baseSha: "a".repeat(40),
   headSha: "b".repeat(40),
+  engineSha: "e".repeat(40),
   baseBranch: "main",
   trigger: {
     kind: "app",
@@ -77,7 +78,7 @@ function fixture() {
     centralInstallation: {
       id: 29,
       app_id: 456,
-      permissions: { metadata: "read", actions: "write" },
+      permissions: { metadata: "read", contents: "read", actions: "write" },
       suspended_at: null as string | null,
     },
     permission: "write",
@@ -94,6 +95,14 @@ function fixture() {
     publishToken: "ghs_TARGET-publish-token",
     dispatchToken: "ghs_DISPATCH-central-token",
     centralScope: { total_count: 1, repositories: [{ id: 100, full_name: "engine/central" }] },
+    centralRepository: {
+      id: 100,
+      full_name: "engine/central",
+      private: true,
+      visibility: "private",
+      default_branch: "main",
+    } as Record<string, unknown>,
+    centralCommit: { sha: "e".repeat(40) } as Record<string, unknown>,
     expiresAt: new Date(now + 3_600_000).toISOString(),
     calls,
     options: { now: () => now, fetch: undefined as unknown as typeof globalThis.fetch },
@@ -127,6 +136,8 @@ function fixture() {
       };
     else if (url.pathname === "/installation/repositories")
       data = auth === `token ${f.dispatchToken}` ? f.centralScope : f.scope;
+    else if (url.pathname === "/repos/engine/central") data = f.centralRepository;
+    else if (url.pathname === "/repos/engine/central/commits/main") data = f.centralCommit;
     else if (url.pathname.endsWith("/pulls/5")) data = f.pr;
     else if (url.pathname.endsWith("/collaborators/writer/permission"))
       data = { permission: f.permission };
@@ -299,6 +310,85 @@ describe("App JWT and scoped installation credentials", () => {
 });
 
 describe("trusted GitHub App gateway adapter", () => {
+  it("resolves the actual default-branch engine with a central-only contents read token", async () => {
+    const f = fixture();
+    const gateway = createAppGitHubGateway(credentials, central, f.options);
+    expect(await gateway.resolveEngine()).toBe("e".repeat(40));
+    expect(f.calls.map(({ path }) => path)).toEqual([
+      "/repos/engine/central/installation",
+      "/app/installations/29/access_tokens",
+      "/installation/repositories",
+      "/repos/engine/central",
+      "/repos/engine/central/commits/main",
+    ]);
+    expect(f.calls[1]?.body).toEqual({
+      repositories: ["central"],
+      permissions: { metadata: "read", contents: "read", actions: "write" },
+    });
+    expect(f.calls.slice(2).every(({ auth }) => auth === `token ${f.dispatchToken}`)).toBe(true);
+  });
+  it.each([
+    { private: false },
+    { private: undefined },
+    { private: "true" },
+    { visibility: "internal" },
+    { visibility: undefined },
+    { full_name: "other/central" },
+    { id: 0 },
+    { default_branch: "release" },
+    { default_branch: undefined },
+  ])("rejects untrusted central metadata before dispatch %#", async (changed) => {
+    const f = fixture();
+    Object.assign(f.centralRepository, changed);
+    await expect(
+      createAppGitHubGateway(credentials, central, f.options).dispatch(request),
+    ).rejects.toThrow("CENTRAL_REPOSITORY_REJECTED");
+    expect(f.calls.some(({ path }) => path.endsWith("/dispatches"))).toBe(false);
+  });
+  it("fails closed if authenticated central metadata cannot be read", async () => {
+    const f = fixture();
+    f.errorPath = "/repos/engine/central";
+    await expect(
+      createAppGitHubGateway(credentials, central, f.options).dispatch(request),
+    ).rejects.toThrow("CENTRAL_REPOSITORY_REJECTED");
+    expect(f.calls.some(({ path }) => path.endsWith("/dispatches"))).toBe(false);
+  });
+  it("rejects a public central repository before reading its engine commit", async () => {
+    const f = fixture();
+    f.centralRepository.private = false;
+    f.centralRepository.visibility = "public";
+    await expect(
+      createAppGitHubGateway(credentials, central, f.options).resolveEngine(),
+    ).rejects.toThrow("CENTRAL_REPOSITORY_REJECTED");
+    expect(f.calls.some(({ path }) => path.includes("/commits/"))).toBe(false);
+  });
+  it("fails closed when the trusted engine commit is inaccessible", async () => {
+    const f = fixture();
+    f.errorPath = "/repos/engine/central/commits/main";
+    await expect(
+      createAppGitHubGateway(credentials, central, f.options).resolveEngine(),
+    ).rejects.toThrow("CENTRAL_ENGINE_REJECTED");
+    expect(f.calls.some(({ path }) => path.endsWith("/dispatches"))).toBe(false);
+  });
+  it("requires contents read only on the central dispatcher before engine lookup", async () => {
+    const f = fixture();
+    delete (f.centralInstallation.permissions as Record<string, string>).contents;
+    await expect(
+      createAppGitHubGateway(credentials, central, f.options).resolveEngine(),
+    ).rejects.toThrow("INSTALLATION_PERMISSIONS_INSUFFICIENT");
+    expect(f.calls.map(({ path }) => path)).toEqual(["/repos/engine/central/installation"]);
+  });
+  it.each([undefined, "moving-branch", "E".repeat(40)])(
+    "rejects unknown engine commit %j",
+    async (sha) => {
+      const f = fixture();
+      f.centralCommit.sha = sha;
+      await expect(
+        createAppGitHubGateway(credentials, central, f.options).resolveEngine(),
+      ).rejects.toThrow("CENTRAL_ENGINE_REJECTED");
+      expect(f.calls.some(({ path }) => path.endsWith("/dispatches"))).toBe(false);
+    },
+  );
   it("requires a separate dispatcher identity without leaking credentials", () => {
     for (const changed of [
       { ...central, credentials: undefined },
@@ -386,15 +476,17 @@ describe("trusted GitHub App gateway adapter", () => {
       "/repos/engine/central/installation",
       "/app/installations/29/access_tokens",
       "/installation/repositories",
+      "/repos/engine/central",
       "/repos/engine/central/actions/workflows/ai-review-v2.yml/dispatches",
     ]);
     expect(f.calls[1]?.body).toEqual({
       repositories: ["central"],
-      permissions: { metadata: "read", actions: "write" },
+      permissions: { metadata: "read", contents: "read", actions: "write" },
     });
-    expect(f.calls[3]?.body).toEqual({ ref: "main", inputs: { request: JSON.stringify(request) } });
+    expect(f.calls[4]?.body).toEqual({ ref: "main", inputs: { request: JSON.stringify(request) } });
     expect(f.calls[2]?.auth).toBe(`token ${f.dispatchToken}`);
     expect(f.calls[3]?.auth).toBe(`token ${f.dispatchToken}`);
+    expect(f.calls[4]?.auth).toBe(`token ${f.dispatchToken}`);
     for (const call of f.calls.slice(0, 2)) {
       const [header, payload, signature] = call.auth.replace(/^bearer /, "").split(".");
       expect(JSON.parse(Buffer.from(payload!, "base64url").toString()).iss).toBe("456");
@@ -457,7 +549,7 @@ describe("trusted GitHub App gateway adapter", () => {
         f.expiresAt = new Date(now - 1).toISOString();
       },
       (f: ReturnType<typeof fixture>) => {
-        f.returnedPermissions = { metadata: "read", actions: "write", contents: "read" };
+        f.returnedPermissions = { metadata: "read", actions: "write", contents: "write" };
       },
       (f: ReturnType<typeof fixture>) => {
         f.centralScope = {

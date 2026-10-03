@@ -8,6 +8,7 @@
   "public": false,
   "default_permissions": {
     "metadata": "read",
+    "contents": "read",
     "actions": "write"
   },
   "default_events": []

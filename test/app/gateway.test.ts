@@ -13,6 +13,7 @@ import { SqliteCommandLedger } from "../../src/app/command-ledger.js";
 const secret = "test-webhook-secret";
 const baseSha = "a".repeat(40);
 const headSha = "b".repeat(40);
+const engineSha = "e".repeat(40);
 const cleanup: (() => void)[] = [];
 afterEach(() => {
   cleanup
@@ -33,6 +34,9 @@ function fixture() {
     webhookSecret: secret,
     ledger,
     github: {
+      async resolveEngine() {
+        return engineSha;
+      },
       async resolveTarget(repository, installationId, prNumber, actor) {
         expect([repository, installationId, prNumber, actor]).toEqual([
           "owner/repo",
@@ -75,6 +79,47 @@ function fixture() {
 }
 
 describe("signed App command gateway", () => {
+  it("accepts a changed engine for the same completed PR snapshot, retaining same-engine deduplication", async () => {
+    const f = fixture();
+    expect(await handleWebhook(f.input(), f.deps)).toEqual({ status: "DISPATCHED" });
+    f.deps.ledger.reconcile("delivery-1", "completed");
+    expect(
+      await handleWebhook(
+        f.input({ ...f.payload, comment: { ...f.payload.comment, id: 72 } }, "delivery-2"),
+        f.deps,
+      ),
+    ).toEqual({ status: "DUPLICATE_COMMAND" });
+    f.deps.github.resolveEngine = async () => "f".repeat(40);
+    expect(
+      await handleWebhook(
+        f.input({ ...f.payload, comment: { ...f.payload.comment, id: 73 } }, "delivery-3"),
+        f.deps,
+      ),
+    ).toEqual({ status: "DISPATCHED" });
+    expect(f.requests.map(({ engineSha }) => engineSha)).toEqual(["e".repeat(40), "f".repeat(40)]);
+    expect(await handleWebhook(f.input(f.payload, "replayed-delivery"), f.deps)).toEqual({
+      status: "DUPLICATE_COMMENT",
+    });
+  });
+  it.each(["", "moving-ref", "E".repeat(40)])(
+    "rejects engine identity %j before claiming the command",
+    async (engine) => {
+      const f = fixture();
+      f.deps.github.resolveEngine = async () => engine;
+      expect(await handleWebhook(f.input(), f.deps)).toEqual({ status: "CENTRAL_REJECTED" });
+      expect(f.deps.ledger.hasComment("owner/repo", 71)).toBe(false);
+      expect(f.requests).toHaveLength(0);
+    },
+  );
+  it("does not claim the comment when central repository verification fails", async () => {
+    const f = fixture();
+    f.deps.github.resolveEngine = async () => {
+      throw new Error("private-token");
+    };
+    expect(await handleWebhook(f.input(), f.deps)).toEqual({ status: "CENTRAL_REJECTED" });
+    expect(f.deps.ledger.hasComment("owner/repo", 71)).toBe(false);
+    expect(f.requests).toHaveLength(0);
+  });
   it.each(["delivery_with_underscore", "a".repeat(101)])(
     "rejects delivery %s before consuming the signed comment",
     async (delivery) => {
@@ -97,6 +142,7 @@ describe("signed App command gateway", () => {
         prNumber: 5,
         baseSha,
         headSha,
+        engineSha,
         baseBranch: "main",
         trigger: {
           kind: "app",

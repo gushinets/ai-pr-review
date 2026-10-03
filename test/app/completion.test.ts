@@ -9,6 +9,7 @@ const identity = {
   prNumber: 5,
   baseSha: "a".repeat(40),
   headSha: "b".repeat(40),
+  engineSha: "e".repeat(40),
 };
 const secret = "central-completion-secret";
 const cleanup: (() => void)[] = [];
@@ -35,6 +36,20 @@ function fixture() {
   return { ledger, completion, input, deps: { completionSecret: secret, ledger } };
 }
 describe("authenticated terminal completion", () => {
+  it("cannot release a changed-engine claim with a completion signed for the old engine", async () => {
+    const f = fixture();
+    await handleCompletion(f.input({ ...f.completion, outcome: "completed" }), f.deps);
+    const changed = { ...identity, engineSha: "f".repeat(40) };
+    expect(f.ledger.claim("changed-engine", changed, 72)).toBe("CLAIMED");
+    expect(
+      await handleCompletion(f.input({ ...f.completion, deliveryId: "changed-engine" }), f.deps),
+    ).toEqual({
+      status: "COMPLETION_REJECTED",
+    });
+    expect(f.ledger.commandStatus("changed-engine")).toBe("claimed");
+    expect(await handleCompletion(f.input(), f.deps)).toEqual({ status: "COMPLETION_IGNORED" });
+    expect(f.ledger.commandStatus("changed-engine")).toBe("claimed");
+  });
   it("releases only a retryable command and keeps its original webhook delivery", async () => {
     const f = fixture();
     expect(await handleCompletion(f.input(), f.deps)).toEqual({ status: "COMPLETION_RECORDED" });
@@ -88,6 +103,7 @@ describe("authenticated terminal completion", () => {
     { prNumber: 6 },
     { baseSha: "c".repeat(40) },
     { headSha: "c".repeat(40) },
+    { engineSha: "f".repeat(40) },
     { deliveryId: "unknown-delivery" },
   ])("rejects mismatched claimed identity %j", async (changed) => {
     const f = fixture();
@@ -121,6 +137,8 @@ describe("authenticated terminal completion", () => {
     { deliveryId: "" },
     { headSha: "invalid" },
     { baseSha: null },
+    { engineSha: undefined },
+    { engineSha: "invalid" },
     { repository: "invalid" },
   ])("rejects malformed field %j", async (changed) => {
     const f = fixture();
@@ -194,6 +212,9 @@ describe("authenticated terminal completion", () => {
         webhookSecret: "webhook-secret",
         ledger: f.ledger,
         github: {
+          async resolveEngine() {
+            return identity.engineSha;
+          },
           async resolveTarget() {
             return { ...identity, number: 5, state: "open", baseBranch: "main" };
           },

@@ -16,11 +16,14 @@ key, Linear credential or config file is required.
 
 The gateway verifies HMAC-SHA256 over raw webhook bytes, accepts created PR
 conversation comments only, resolves installation and PR through GitHub APIs,
-authorizes the commenter, captures exact base/head and dispatches the central
+authorizes the commenter, captures exact base/head and the authenticated private
+execution repository's default-branch engine SHA, then dispatches the central
 workflow. A durable SQLite command ledger handles delivery replay and command
 identity. Canonical Actions concurrency serializes reviews of each target PR
 using `queue: max`; shadows use independent run-scoped concurrency domains;
-canonical completed PASS/BLOCK state prevents rerolls across commands/restarts.
+canonical completed PASS/BLOCK state prevents rerolls for the same engine across
+commands/restarts. A new trusted engine SHA permits a new command on unchanged
+target code. Completion signatures bind the engine and original delivery.
 Signed comment IDs remain consumed independently of unsigned delivery headers.
 A purpose-separated HMAC completion callback retains completed claims or releases
 only the original claim after terminal execution/publication failure. A new comment
@@ -30,6 +33,9 @@ The local recovery CLI distinguishes active/executed/absent/ambiguous evidence.
 Under an operator maintenance freeze, it releases only matching cancelled runs
 with zero jobs across all attempts, after two fresh inspections. Missing runs or
 elapsed time never prove non-dispatch; completed claims and tombstones remain.
+Legacy completed four-field claims can be bound to an independently verified
+historical engine through an operator-only transaction; active or ambiguous
+legacy claims remain held.
 
 ## Central execution
 
@@ -45,6 +51,14 @@ Requirements providers are `none` and `linear`. Absence is explicit evidence,
 not an error. Linear remains private normative evidence, never instructions.
 Nullable Linear identity is an additive persisted-schema migration: existing
 V1 artifacts remain readable; transport/config behavior remains V1 by default.
+
+V2 runs only in a private execution/state repository containing the trusted
+engine and workflow; this public source repository is not an execution target.
+Authenticated GitHub metadata must report private visibility before gateway
+dispatch, preparation and artifact upload. All workflow jobs reject public
+execution, including internal experiments. Authorized execution-repository
+readers can see all pilot findings and shadows, so their access must match that
+data. Source-derived sanitized evidence still requires private storage.
 
 Canonical state lives in the execution repository. Artifact names include a
 target-repository digest and PR; trusted workflow provenance is checked against
@@ -65,7 +79,8 @@ Target source is always inert; it is never installed, built or executed.
 App permissions: metadata read (implicit), contents read, pull requests write
 (includes read/comment publication), issues read (issue-comment subscription),
 checks write, commit statuses read and Actions read for CI evidence. Both Apps
-are private. A separate dispatcher App has only metadata read/Actions write and
+are private. A separate dispatcher App has metadata/contents read and Actions
+write, resolving the trusted engine SHA before claims. It
 is installed only on the execution repository. Its credentials never enter
 central review jobs. Operator recovery uses metadata/Actions read only. Every token is narrowed to one
 repository and an explicit phase-specific permission subset. No user IDs or

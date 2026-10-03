@@ -27,7 +27,15 @@ export async function handleCompletion(
   if (typeof value !== "object" || value === null || Array.isArray(value))
     return { status: "INVALID_PAYLOAD" };
   const payload = value as Record<string, unknown>;
-  const keys = ["deliveryId", "repository", "prNumber", "baseSha", "headSha", "outcome"];
+  const keys = [
+    "deliveryId",
+    "repository",
+    "prNumber",
+    "baseSha",
+    "headSha",
+    "engineSha",
+    "outcome",
+  ];
   if (
     Object.keys(payload).length !== keys.length ||
     Object.keys(payload).some((key) => !keys.includes(key)) ||
@@ -43,6 +51,8 @@ export async function handleCompletion(
     !/^[0-9a-f]{40}$/i.test(payload.baseSha) ||
     typeof payload.headSha !== "string" ||
     !/^[0-9a-f]{40}$/i.test(payload.headSha) ||
+    typeof payload.engineSha !== "string" ||
+    !/^[0-9a-f]{40}$/.test(payload.engineSha) ||
     (payload.outcome !== "completed" && payload.outcome !== "retryable")
   )
     return { status: "INVALID_PAYLOAD" };
@@ -54,6 +64,7 @@ export async function handleCompletion(
         prNumber: payload.prNumber,
         baseSha: payload.baseSha,
         headSha: payload.headSha,
+        engineSha: payload.engineSha,
         outcome: payload.outcome,
       }),
     };

@@ -10,6 +10,10 @@ it("dispatches centrally and keeps model, App and publication credentials in sep
   const workflow = parse(raw);
   expect(Object.keys(workflow.on)).toEqual(["workflow_dispatch"]);
   expect(workflow.permissions).toEqual({});
+  for (const job of [workflow.jobs.review, workflow.jobs.publisher, workflow.jobs.completion]) {
+    expect(job.if).toContain("github.event.repository.private");
+    expect(job.env.EXECUTION_REPOSITORY_PRIVATE).toBe("${{ github.event.repository.private }}");
+  }
   expect(workflow.concurrency["cancel-in-progress"]).toBe(false);
   expect(workflow.concurrency.queue).toBe("max");
   expect(workflow.concurrency.group).toBe(
@@ -34,6 +38,9 @@ it("dispatches centrally and keeps model, App and publication credentials in sep
   expect(model.env.GITHUB_APP_PRIVATE_KEY).toBeUndefined();
   expect(model.env.LINEAR_CLIENT_SECRET).toBeUndefined();
   expect(model.env.STATE_READ_TOKEN).toBeUndefined();
+  const verify = steps.find((step: { id?: string }) => step.id === "verify");
+  expect(verify.env.STATE_READ_TOKEN).toBe("${{ github.token }}");
+  expect(verify.env.STATE_REPOSITORY).toBe("${{ github.repository }}");
   const graph = steps.find((step: { id?: string }) => step.id === "graph");
   expect(Object.keys(graph.env)).not.toContain("TARGET_READ_TOKEN");
   expect(Object.keys(graph.env)).not.toContain("QWEN_TOKEN_PLAN_API_KEY");

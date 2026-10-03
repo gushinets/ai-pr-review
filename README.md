@@ -10,8 +10,9 @@ Private GitHub App pilot for deterministic, multi-model PR review.
 
 The App reviews exact base/head, publishes the **AI PR Review** Check Run,
 updates one stable summary and adds inline findings. After a correction, post
-a new comment. Pushes alone do not trigger V2. Completed same-head results are
-reused; failed execution/publication can be retried without rerolling a verdict.
+a new comment. Pushes alone do not trigger V2. Completed results for the same
+base/head/engine are reused; a new trusted engine SHA permits a new review.
+Failed execution/publication can be retried without rerolling a verdict.
 
 Consumers need no review workflow, provider key, Linear credential, PAT or
 configuration file. Optional configuration and policy are read only from BASE.
@@ -24,6 +25,9 @@ billing system or unrestricted public rollout is included.
 Operator deployment and live App acceptance are still required; see the
 [operator checklist](docs/operations.md#v2-operator-checklist). Fixtures do not
 claim a production App installation or live model E2E.
+V2 requires a separate private execution repository containing the trusted
+engine and workflow. This public source repository cannot execute V2 reviews
+or experiments; sanitized findings can still reveal private implementation details.
 
 Architecture: [V2 amendment](docs/v2-design.md) and retained
 [V1 security design](docs/superpowers/specs/2026-09-10-ai-pr-review-design.md).

@@ -81,7 +81,9 @@ export function createWebhookServer(deps: GatewayDependencies & { completionSecr
               ? 400
               : result.status === "PAYLOAD_TOO_LARGE"
                 ? 413
-                : ["TARGET_REJECTED", "COMPLETION_REJECTED"].includes(result.status)
+                : ["TARGET_REJECTED", "CENTRAL_REJECTED", "COMPLETION_REJECTED"].includes(
+                      result.status,
+                    )
                   ? 403
                   : ["DISPATCH_UNCERTAIN", "LEDGER_UNAVAILABLE"].includes(result.status)
                     ? 503
