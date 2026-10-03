@@ -51,6 +51,10 @@ export class SqliteCommandLedger {
   close(): void {
     this.db.close();
   }
+  commandStatus(delivery: string): string | null {
+    const row = this.db.prepare("SELECT status FROM commands WHERE delivery_id = ?").get(delivery);
+    return typeof row?.status === "string" ? row.status : null;
+  }
   hasDelivery(delivery: string): boolean {
     return this.db.prepare("SELECT 1 FROM deliveries WHERE id = ?").get(delivery) !== undefined;
   }

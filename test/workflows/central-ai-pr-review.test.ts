@@ -11,6 +11,13 @@ it("dispatches centrally and keeps model, App and publication credentials in sep
   expect(Object.keys(workflow.on)).toEqual(["workflow_dispatch"]);
   expect(workflow.permissions).toEqual({});
   expect(workflow.concurrency["cancel-in-progress"]).toBe(false);
+  expect(workflow.concurrency.queue).toBe("max");
+  expect(workflow.concurrency.group).toBe(
+    "ai-review-v2-${{ (inputs.compare || fromJSON(inputs.request).execution == 'shadow') && format('shadow-{0}', github.run_id) || 'canonical' }}-${{ fromJSON(inputs.request).repository }}-${{ fromJSON(inputs.request).prNumber }}",
+  );
+  expect(workflow["run-name"]).toBe(
+    "AI PR Review V2 ${{ (inputs.compare || fromJSON(inputs.request).execution == 'shadow') && 'shadow' || 'canonical' }} ${{ fromJSON(inputs.request).trigger.deliveryId || github.run_id }}",
+  );
   expect(workflow.jobs.review.permissions["pull-requests"]).toBeUndefined();
   const steps = workflow.jobs.review.steps;
   const model = steps.find((step: { id?: string }) => step.id === "execute");
