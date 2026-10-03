@@ -23,7 +23,7 @@ afterEach(async () => {
   vi.unstubAllEnvs();
   await Promise.all(temps.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
-it("fake installed App → command → central BLOCK → correction → closure → PASS, then shadow", async () => {
+it("fake installed App → missing graph artifact → central BLOCK → correction → closure → PASS, then shadow", async () => {
   const temp = await mkdtemp(join(tmpdir(), "app-e2e-"));
   temps.push(temp);
   const ledger = new SqliteCommandLedger(join(temp, "commands.sqlite"));
@@ -202,6 +202,8 @@ it("fake installed App → command → central BLOCK → correction → closure 
       ),
     ).toBe(0);
     expect(await runCentralCli(["graph"], common, dependencies)).toBe(0);
+    if (run === 1)
+      await rm(join(runner, "ai-pr-review/private/review-root/evidence/graph/manifest.json"));
     expect(
       await runCentralCli(
         ["execute"],
@@ -229,6 +231,8 @@ it("fake installed App → command → central BLOCK → correction → closure 
     expect(telemetry.repository).toBe(pr().repository);
     expect(telemetry.head_sha).toBe(head);
     expect(telemetry.graph_status).toBe("off");
+    expect(telemetry.graph_failure_code).toBeNull();
+    expect(result.telemetry.graph).toEqual({ mode: "off", status: "off", failure_code: null });
     expect(JSON.stringify(result)).not.toContain("canary");
     if (request.execution === "canonical") {
       expect(

@@ -14,6 +14,8 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
+import { Type } from "typebox";
+import Schema from "typebox/schema";
 import { isRepositoryRelativePath } from "../contracts/common.js";
 import { unifiedDiffSections } from "../github/diff.js";
 import type { ChangedFile } from "../github/preflight-reader.js";
@@ -36,15 +38,17 @@ export const GRAPH_BOUNDS = Object.freeze({
   depth: 5,
 });
 export type GraphStatus = "completed" | "failed" | "off";
-export type GraphFailureCode =
-  | "UNSAFE_INPUT"
-  | "INPUT_LIMIT"
-  | "UNAVAILABLE"
-  | "TIMEOUT"
-  | "OUTPUT_LIMIT"
-  | "PROCESS_FAILED"
-  | "INVALID_OUTPUT"
-  | "ARTIFACT_IO";
+const failureCodes = [
+  "UNSAFE_INPUT",
+  "INPUT_LIMIT",
+  "UNAVAILABLE",
+  "TIMEOUT",
+  "OUTPUT_LIMIT",
+  "PROCESS_FAILED",
+  "INVALID_OUTPUT",
+  "ARTIFACT_IO",
+] as const;
+export type GraphFailureCode = (typeof failureCodes)[number];
 export interface GraphManifest {
   schema_version: 1;
   codegraph_version: typeof CODEGRAPH_VERSION;
@@ -55,6 +59,35 @@ export interface GraphManifest {
   truncated: boolean;
   source_files: number;
   source_bytes: number;
+}
+const manifestValidator = Schema.Compile(
+  Type.Object(
+    {
+      schema_version: Type.Literal(1),
+      codegraph_version: Type.Literal(CODEGRAPH_VERSION),
+      status: Type.Union([Type.Literal("completed"), Type.Literal("failed"), Type.Literal("off")]),
+      failure_code: Type.Union([...failureCodes.map((code) => Type.Literal(code)), Type.Null()]),
+      bounds: Type.Object(
+        Object.fromEntries(
+          Object.entries(GRAPH_BOUNDS).map(([key, value]) => [key, Type.Literal(value)]),
+        ),
+        { additionalProperties: false },
+      ),
+      duration_ms: Type.Number({ minimum: 0 }),
+      truncated: Type.Boolean(),
+      source_files: Type.Integer({ minimum: 0, maximum: GRAPH_BOUNDS.files }),
+      source_bytes: Type.Integer({ minimum: 0, maximum: GRAPH_BOUNDS.source_bytes }),
+    },
+    { additionalProperties: false },
+  ),
+);
+export function parseGraphManifest(source: string): GraphManifest {
+  const raw: unknown = JSON.parse(source);
+  if (!manifestValidator.Check(raw)) throw new Error("ARTIFACT_IO");
+  const manifest = raw as unknown as GraphManifest;
+  if ((manifest.status === "failed") !== (manifest.failure_code !== null))
+    throw new Error("ARTIFACT_IO");
+  return manifest;
 }
 export interface GraphProcessSpec {
   command: string;
@@ -216,9 +249,9 @@ export async function runGraphProcess(spec: GraphProcessSpec): Promise<GraphProc
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
     });
-    let stdout = "",
-      stderr = "",
-      bytes = 0,
+    const stdoutChunks: Buffer[] = [],
+      stderrChunks: Buffer[] = [];
+    let bytes = 0,
       timedOut = false,
       outputLimit = false;
     const timer = setTimeout(() => {
@@ -232,8 +265,7 @@ export async function runGraphProcess(spec: GraphProcessSpec): Promise<GraphProc
         child.kill("SIGKILL");
         return;
       }
-      if (error) stderr += chunk.toString("utf8");
-      else stdout += chunk.toString("utf8");
+      (error ? stderrChunks : stdoutChunks).push(chunk);
     };
     child.stdout.on("data", (chunk: Buffer) => collect(chunk, false));
     child.stderr.on("data", (chunk: Buffer) => collect(chunk, true));
@@ -243,7 +275,13 @@ export async function runGraphProcess(spec: GraphProcessSpec): Promise<GraphProc
     });
     child.once("close", (exitCode) => {
       clearTimeout(timer);
-      done({ exitCode, stdout, stderr, timedOut, outputLimit });
+      done({
+        exitCode,
+        stdout: Buffer.concat(stdoutChunks).toString("utf8"),
+        stderr: Buffer.concat(stderrChunks).toString("utf8"),
+        timedOut,
+        outputLimit,
+      });
     });
   });
 }

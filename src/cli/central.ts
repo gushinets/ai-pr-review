@@ -7,7 +7,7 @@ import { getAppIdentity, mintInstallationToken } from "../app/github-app.js";
 import { parseReviewRequest, type ReviewRequest } from "../contracts/review-request.js";
 import { createGitHubClient, type GithubReadClient } from "../github/github-client.js";
 import { createGitHubPublisher, type GitHubPublisher } from "../github/publisher.js";
-import { prepareGraphEvidence, type GraphManifest } from "../graph/prepare.js";
+import { parseGraphManifest, prepareGraphEvidence, type GraphManifest } from "../graph/prepare.js";
 import { recordExperimentTelemetry } from "../graph/experiment.js";
 import { LinearRequirementsLoader } from "../linear/requirements-loader.js";
 import { resolveReviewRequest } from "../orchestration/request-adapter.js";
@@ -170,9 +170,13 @@ export async function runCentralCli(
       args.length !== 1 ||
       !Object.hasOwn(forbiddenByPhase, phase) ||
       forbiddenByPhase[phase].some((key) => env[key] !== undefined) ||
-      ["QWEN_API_KEY", "BAILIAN_TOKEN_PLAN_API_KEY", "ALIBABA_WORKSPACE_ID"].some(
-        (key) => env[key] !== undefined,
-      ) ||
+      [
+        "QWEN_API_KEY",
+        "BAILIAN_TOKEN_PLAN_API_KEY",
+        "ALIBABA_WORKSPACE_ID",
+        "GITHUB_DISPATCH_APP_PRIVATE_KEY",
+        "GITHUB_DISPATCH_APP_PRIVATE_KEY_FILE",
+      ].some((key) => env[key] !== undefined) ||
       env.GITHUB_WEBHOOK_SECRET !== undefined ||
       (phase !== "complete" && env.AI_REVIEW_COMPLETION_SECRET !== undefined)
     )
@@ -342,6 +346,21 @@ export async function runCentralCli(
       return 0;
     }
     if (phase === "execute") {
+      let graph: Pick<GraphManifest, "status" | "failure_code"> = {
+        status: "off",
+        failure_code: null,
+      };
+      if (request.graphMode === "codegraph") {
+        graph = { status: "failed", failure_code: "ARTIFACT_IO" };
+        try {
+          const manifest = parseGraphManifest(
+            await readOwned(workDir, "private/review-root/evidence/graph/manifest.json"),
+          );
+          if (manifest.status !== "off") graph = manifest;
+        } catch {
+          // Optional evidence must never discard a completed, expensive model review.
+        }
+      }
       const result: ReviewPipelineResult = await executeReview(input, {
         github: github!,
         ...(dependencies.engine ? { engine: dependencies.engine } : {}),
@@ -350,9 +369,6 @@ export async function runCentralCli(
         ),
       });
       if (result.kind === "STATE_READY") {
-        const graph = JSON.parse(
-          await readOwned(workDir, "private/review-root/evidence/graph/manifest.json"),
-        ) as GraphManifest;
         result.state.telemetry.graph = {
           mode: request.graphMode,
           status: graph.status,
