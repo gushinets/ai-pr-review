@@ -47,7 +47,11 @@ import {
   unifiedDiffSections,
 } from "../github/diff.js";
 import type { GithubReadClient } from "../github/github-client.js";
-import type { LinearRequirementsContextV1 } from "../linear/requirements-loader.js";
+import {
+  noRequirements,
+  type NormalizedRequirementsContext,
+  type RequirementsProvider,
+} from "../requirements/provider.js";
 import { buildReviewFindings } from "../publishing/findings.js";
 import {
   assertDurableValues,
@@ -72,7 +76,7 @@ import {
 } from "../review-engine/resolution-result.js";
 import { computeFreshVerdict, computeFinalVerdict } from "../review-engine/verdict.js";
 import { assertRealpathContained } from "../sandbox/path-containment.js";
-import type { StateDiscovery } from "../state/github-artifact-store.js";
+import { StateWorkflowConflictError, type StateDiscovery } from "../state/github-artifact-store.js";
 import {
   buildReviewState,
   parseReviewState,
@@ -88,11 +92,13 @@ export type ReviewPipelineResult =
 export interface ReviewInput {
   preflight: PreflightResult;
   workDir: string;
+  optionalConfig?: boolean;
 }
 export interface PrepareDependencies {
   github: GithubReadClient;
   loadState(identity: ReviewIdentityV1, baseBranch: string): Promise<StateDiscovery>;
-  loadRequirements(identifier: string): Promise<LinearRequirementsContextV1>;
+  loadRequirements?: (identifier: string) => Promise<NormalizedRequirementsContext>;
+  requirementsProvider?: RequirementsProvider;
   secretValues?: string[];
   warn?: (warning: string) => void;
 }
@@ -327,7 +333,7 @@ export async function prepareReview(
       if (
         saved.outcome === "UNABLE_TO_REVIEW" ||
         saved.lineage.base_branch !== p.base_branch ||
-        Object.entries(p.review_identity!).some(
+        Object.entries(input.optionalConfig ? p.review_attempt_identity! : p.review_identity!).some(
           ([key, value]) => saved.review_identity?.[key as keyof ReviewIdentityV1] !== value,
         )
       )
@@ -336,7 +342,12 @@ export async function prepareReview(
       return (await current(input, dependencies.github)) ?? { kind: "STATE_READY", state: saved };
     }
     stage = "LINEAR_UNAVAILABLE";
-    const rawRequirements = await dependencies.loadRequirements(p.review_identity!.linear_issue);
+    const identifier = p.review_identity!.linear_issue;
+    const rawRequirements = dependencies.requirementsProvider
+      ? await dependencies.requirementsProvider.load(identifier)
+      : identifier === null
+        ? await noRequirements.load(null)
+        : await dependencies.loadRequirements!(identifier);
     // Only authorized context crosses the OS boundary. Prepare-process credentials never do.
     const clean = (text: string) => sanitizeDurableText(text, sources(dependencies.secretValues));
     const requirements = {
@@ -356,7 +367,9 @@ export async function prepareReview(
     stage = "CONFIG_INVALID";
     const readContent = (path: string, sha: string) =>
       dependencies.github.readContent(p.repository, path, sha);
-    const config = await loadRepoConfigAtBase(p.base_sha!, readContent);
+    const config = await loadRepoConfigAtBase(p.base_sha!, readContent, {
+      optional: input.optionalConfig === true,
+    });
     const changedFiles = await dependencies.github.listChangedFiles(p.repository, p.pr_number!);
     stage = "POLICY_MISSING";
     const policy = await selectTrustedPolicy(
@@ -450,6 +463,8 @@ export async function prepareReview(
     });
     return { kind: "PREPARED" };
   } catch (error) {
+    // Do not persist an alternate producer's failure artifact and obstruct recovery.
+    if (error instanceof StateWorkflowConflictError) throw error;
     if (error instanceof StalePrDiffError) return { kind: "STALE_SKIPPED" };
     state.unable_reason = failureReason(error, stage);
     return finish(input, dependencies.github, state, privacy);
@@ -488,7 +503,7 @@ async function readPrepared(input: ReviewInput): Promise<{
       state.review_identity?.repository !== input.preflight.repository ||
       state.review_identity.pr_number !== input.preflight.pr_number ||
       state.lineage.base_branch !== input.preflight.base_branch ||
-      state.lineage.linear_issue !== input.preflight.linear_issue
+      (!input.optionalConfig && state.lineage.linear_issue !== input.preflight.linear_issue)
     )
       throw new Error("INTERNAL_ERROR");
   }

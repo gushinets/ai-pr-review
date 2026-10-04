@@ -26,3 +26,7 @@ jobs:
       - run: npm ci
       - run: npm run check
       - run: npm run build
+      - name: Verify pinned static CodeGraph in its restricted container
+        run: |
+          docker build -t ai-pr-review-codegraph:1.6.1 graph
+          CODEGRAPH_CONTAINER_TEST=1 npm test -- test/graph/container.test.ts

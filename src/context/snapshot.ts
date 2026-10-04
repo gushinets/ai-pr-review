@@ -7,7 +7,7 @@ import { validateReviewContext, type ReviewContextV1 } from "../contracts/review
 import { extractSafeArchive } from "../github/archive.js";
 import { unifiedDiffSections } from "../github/diff.js";
 import type { ChangedFile } from "../github/preflight-reader.js";
-import type { LinearRequirementsContextV1 } from "../linear/requirements-loader.js";
+import type { NormalizedRequirementsContext } from "../requirements/provider.js";
 import { installGitDiffShim } from "../sandbox/git-diff-shim.js";
 import {
   assertCreatablePathContained,
@@ -20,7 +20,7 @@ export interface SnapshotInput {
   headArchive: { headSha: string; stream: Readable };
   context: ReviewContextV1;
   policy: readonly TrustedPolicyFile[];
-  requirements: LinearRequirementsContextV1;
+  requirements: NormalizedRequirementsContext;
   unifiedDiff: string;
   changedFiles: readonly ChangedFile[];
   ciSourceRoot: string;

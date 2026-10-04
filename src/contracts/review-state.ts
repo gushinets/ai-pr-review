@@ -77,6 +77,11 @@ export interface ReviewStateV1 {
     input_tokens: number | null;
     output_tokens: number | null;
     estimated_cost_usd: number | null;
+    graph?: {
+      mode: "off" | "codegraph";
+      status: "off" | "completed" | "failed";
+      failure_code: string | null;
+    };
   };
 }
 
@@ -213,6 +218,20 @@ export const ReviewStateV1Schema = Type.Object(
         input_tokens: nullableNonNegativeInteger,
         output_tokens: nullableNonNegativeInteger,
         estimated_cost_usd: nullableNonNegativeNumber,
+        graph: Type.Optional(
+          Type.Object(
+            {
+              mode: Type.Union([Type.Literal("off"), Type.Literal("codegraph")]),
+              status: Type.Union([
+                Type.Literal("off"),
+                Type.Literal("completed"),
+                Type.Literal("failed"),
+              ]),
+              failure_code: Type.Union([Type.String({ pattern: "^[A-Z_]{1,32}$" }), Type.Null()]),
+            },
+            { additionalProperties: false },
+          ),
+        ),
       },
       { additionalProperties: false },
     ),

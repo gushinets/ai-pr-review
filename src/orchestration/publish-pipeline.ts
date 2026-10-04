@@ -23,6 +23,16 @@ export async function runPublish(
     throw new Error("STATE_LOAD_FAILED");
   const stale = new Error("STALE_SKIPPED");
   const requireHead = async () => {
+    if (github.getCurrentIdentity) {
+      const current = await github.getCurrentIdentity(repository, prNumber);
+      if (
+        current.state !== "open" ||
+        current.baseSha !== state.attempt_identity.base_sha ||
+        current.headSha !== headSha
+      )
+        throw stale;
+      return;
+    }
     if ((await github.getHead(repository, prNumber)) !== headSha) throw stale;
   };
   const check = buildMachineCheck(state);

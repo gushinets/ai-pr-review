@@ -7,7 +7,7 @@ export interface ReviewIdentityV1 {
   pr_number: number;
   base_sha: string;
   head_sha: string;
-  linear_issue: string;
+  linear_issue: string | null;
   engine_sha: string;
 }
 
@@ -32,7 +32,10 @@ export const ReviewAttemptIdentityV1Schema = Type.Object(identityFields, {
 });
 
 export const ReviewIdentityV1Schema = Type.Object(
-  { ...identityFields, linear_issue: Type.String({ pattern: "^ANY-[1-9][0-9]*$" }) },
+  {
+    ...identityFields,
+    linear_issue: Type.Union([Type.String({ pattern: "^ANY-[1-9][0-9]*$" }), Type.Null()]),
+  },
   { additionalProperties: false },
 );
 

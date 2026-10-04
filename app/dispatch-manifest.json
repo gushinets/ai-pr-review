@@ -1,0 +1,15 @@
+{
+  "name": "AI PR Review Central Dispatcher",
+  "url": "https://REPLACE_WITH_OPERATOR_HOMEPAGE",
+  "hook_attributes": {
+    "url": "https://REPLACE_WITH_OPERATOR_GATEWAY/webhook",
+    "active": false
+  },
+  "public": false,
+  "default_permissions": {
+    "metadata": "read",
+    "contents": "read",
+    "actions": "write"
+  },
+  "default_events": []
+}

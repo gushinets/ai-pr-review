@@ -1,5 +1,295 @@
 # AI PR Review operations
 
+## V2 operator checklist
+
+The App owner installs the private pilot App, selects repositories and comments `/ai-review`
+on an open PR. Write, maintain or admin access is required. No consumer
+workflow, provider secret, Linear credential, PAT or config is required.
+
+The following production setup requires the account owner:
+
+1. Create a **private execution repository** containing the trusted engine and
+   `.github/workflows/central-ai-pr-review.yml`. Use its protected default branch
+   for V2. This public source repository cannot be the V2 execution/state repository.
+   Restrict its readers to operators authorized to see every pilot target's review
+   findings and shadow data. Artifacts/logs inherit that repository's read access;
+   sanitization does not remove source-derived evidence. Keep it private while
+   private review artifacts or logs remain; do not change its visibility during runs.
+2. Register the private target App using `app/manifest.json`, replacing the homepage and webhook
+   placeholders with operator URLs. Generate its private key and webhook secret.
+   Install it on selected pilot repositories owned by the App's account/organization.
+   A private App cannot be installed on unrelated customer accounts. Register a
+   **different private dispatcher App** using `app/dispatch-manifest.json` and
+   install it only on the central execution repository. Generate a separate key.
+3. Deploy `app/Dockerfile` behind HTTPS. Mount a persistent, private `/data`
+   volume for SQLite; preserve it across gateway restarts. Configure the gateway
+   variables below. Forward POST `/webhook` and POST `/completion`; do not expose
+   the ledger or private key. Set GitHub's webhook URL to `/webhook`.
+4. Protect the private execution repository's default branch. Set repository variable `AI_REVIEW_APP_ID`
+   and `AI_REVIEW_GATEWAY_URL` (the HTTPS origin). Set central secrets
+   `AI_REVIEW_APP_PRIVATE_KEY`, `QWEN_TOKEN_PLAN_API_KEY` and
+   `AI_REVIEW_COMPLETION_SECRET`. The completion secret must match the gateway.
+   Optional Linear experiments also need `LINEAR_CLIENT_ID` and
+   `LINEAR_CLIENT_SECRET`. Consumers store none of these.
+5. Complete the live acceptance sequence below before retiring V1 or changing
+   merge rules. This implementation does not register an App, deploy production,
+   provision secrets or claim that live acceptance has passed.
+
+Gateway environment:
+
+Keep the central dispatcher's credentials only on the gateway /
+operator host, never in central review jobs. Prefer private mounted PEM files.
+
+| Variable                                                                    | Purpose                                                                    |
+| --------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `GITHUB_APP_ID`                                                             | Registered target App's numeric ID                                         |
+| `GITHUB_APP_PRIVATE_KEY` or `GITHUB_APP_PRIVATE_KEY_FILE`                   | Target App PEM key; prefer a private mounted file                          |
+| `GITHUB_DISPATCH_APP_ID`                                                    | Required central dispatcher App ID; different from target App ID           |
+| `GITHUB_DISPATCH_APP_PRIVATE_KEY` or `GITHUB_DISPATCH_APP_PRIVATE_KEY_FILE` | Required central dispatcher PEM key; prefer a private mounted file         |
+| `GITHUB_WEBHOOK_SECRET`                                                     | Raw webhook HMAC verification                                              |
+| `AI_REVIEW_COMPLETION_SECRET`                                               | Independent HMAC key for central completion callbacks                      |
+| `AI_REVIEW_CENTRAL_REPOSITORY`                                              | Required private execution repository, e.g. `OWNER/PRIVATE_EXECUTION_REPO` |
+| `AI_REVIEW_CENTRAL_WORKFLOW`                                                | Optional; defaults to `central-ai-pr-review.yml`                           |
+| `AI_REVIEW_CENTRAL_REF`                                                     | Optional; defaults to `main`; must be the protected default branch         |
+| `AI_REVIEW_LEDGER_PATH`                                                     | Persistent SQLite file, e.g. `/data/commands.sqlite`                       |
+| `PORT`                                                                      | Optional; defaults to 3000                                                 |
+
+Build the gateway from the repository root:
+
+```bash
+docker build -f app/Dockerfile -t ai-pr-review-gateway .
+```
+
+The gateway runs as `node` on Node 22.19.0. Give that user write access to the
+ledger directory. Back up SQLite consistently; do not delete command tombstones
+to retry reviews. A signed comment ID remains consumed even if its unsigned
+delivery header changes. Exact command claims also prevent simultaneous reviews
+of one base/head/engine. Network ambiguity keeps the claim until reconciled; an operator
+must inspect the central run before changing the ledger.
+
+### App permissions and credential boundaries
+
+The target App needs metadata read, contents read, pull requests write, issues read,
+checks write, commit statuses read and **Actions read** for CI runs/jobs/logs.
+Issues read permits the issue-comment subscription; publication uses PR endpoints.
+The separate dispatcher App needs metadata read, contents read (to resolve the
+trusted default-branch engine SHA) and **Actions write**, only
+on the central repository. No customer installation has Actions write; no broad
+PAT or issues write permission is used. Both manifests ship with `public: false`.
+
+Every installation token is narrowed to one verified repository. Read tokens
+receive metadata, contents, pull requests, checks, statuses and Actions read.
+Publisher tokens receive metadata read plus pull requests/checks write. Dispatch
+tokens use the dispatcher identity and receive metadata/contents read and Actions write.
+Operator inspection narrows that identity further to metadata/Actions read. Installation identity, App
+ownership, repository access, permissions, suspension and token scope are checked
+through GitHub; no installation or user IDs are fixed in code.
+
+The gateway validates authenticated execution-repository metadata as private,
+requires the configured ref to equal its default branch and resolves that ref's
+40-character commit SHA before claiming a command. It checks private metadata
+again before dispatch. The workflow rejects public execution for every V2 job,
+including internal/manual experiments. Preparation and pre-upload verification
+also check live repository metadata with the scoped central read token.
+
+The central workflow checks out its exact engine SHA on the default branch.
+App requests pin that SHA: a branch advance before execution fails before target
+token minting or model calls and sends a retryable callback for the original
+engine claim. A new comment can then request the current engine. The actual
+checked-out SHA must match the request; requester-supplied versions cannot
+create arbitrary deduplication identities.
+Preparation receives only target read access, central artifact read access and
+optional Linear secrets. Execution receives a read token for stale validation
+and the provider key; the confined model subprocess receives only its isolated
+review root, trusted runtime and provider credential. The App key, Linear secrets
+and all GitHub tokens are absent from that subprocess. Publisher runs in a fresh
+job with only sanitized state and a scoped write token. Completion runs in another
+fresh job with only sanitized state and its HMAC secret. No phase executes target
+source, installs target dependencies or loads HEAD instructions.
+
+Keep the pilot private. Before any public App rollout, separately add account /
+organization admission, per-installation quota/rate limits and a funding policy.
+The gateway already captures installation identity before its durable command
+claim; that boundary can enforce admission/usage later. This PR adds no billing.
+
+### Optional config and requirements
+
+V2 loads `.github/ai-review.yml` only from BASE. Missing config selects empty
+policy and central CI label `CI`; existing invalid config fails closed. The V1
+schema remains `{version: 1, primary_ci_workflow, policy: {always, scoped}}`.
+Configured policy files retain their existing BASE-only validation. Do not guess
+policy files when config is absent.
+
+The gateway currently requests `requirementsSource: {kind: "none"}` explicitly.
+Trusted internal/manual requests may select
+`{kind: "linear", identifier: "ANY-123"}` with centrally supplied Linear secrets.
+No Linear lookup or PR issue-key prerequisite exists for `none`. Linear remains
+private normative evidence and cannot issue reviewer instructions. The nullable
+Linear identity is backward compatible with historical V1 state.
+
+### State, retries and publication
+
+Canonical artifacts live in the execution repository, named
+`ai-review-state-v2-<repository-digest>-pr-<number>`. They contain only sanitized
+`ai-review-state-v1.json` and are retained for 90 days. Discovery verifies the
+central workflow, default branch, dispatch event, run engine SHA and target
+identity. Target artifacts and PR comments cannot supply canonical state.
+If `AI_REVIEW_CENTRAL_WORKFLOW` selects another safe `.yml`/`.yaml` filename,
+deploy the central workflow under that filename. Preparation derives the trusted
+path from GitHub's `GITHUB_WORKFLOW_REF` and checks its execution repository and
+default-branch ref before discovering state. Artifact provenance must match
+that exact deployed path, so custom deployments retain verdict reuse and
+blocker history. A request cannot select the trusted workflow path.
+Keep the deployed filename stable while canonical artifacts are retained. If
+discovery encounters a target/PR artifact from another otherwise valid central
+default-branch dispatch workflow, it fails with `STATE_LOAD_FAILED` before
+downloading that artifact or starting a new model review. Preparation stops
+without producing another canonical artifact. Restore the original
+deployment path to recover; changing the filename must not reroll a paid verdict
+or discard historical blockers, even after an engine upgrade.
+
+Completed same-base/head/engine PASS or BLOCK is reused without model calls.
+Blocker history survives corrections. Every review checks current base/head and
+open state before persistence and again before publication. Stale attempts cannot
+replace the current result. App ownership identifies Check Runs and bot comments.
+The stable summary is updated and previous inline blockers are closed by the
+existing publisher.
+
+After canonical upload and successful publication, a purpose-separated signed
+callback retains the gateway claim. A terminal execution/publication failure
+releases only that original identity claim, allowing a **new** `/ai-review`
+comment to retry. Signed comment/delivery tombstones remain, so replaying an old
+webhook or callback cannot release a later claim. Signed callbacks bind the
+original engine SHA as well as delivery and target identity. A new trusted
+engine SHA allows a new comment on unchanged target code; another comment using
+the completed engine remains blocked even after artifact retention expires.
+If state was already persisted,
+publication recovery reuses it without rerolling. Callback failure requires
+operator reconciliation; retry the completion job after repairing HTTPS/secrets.
+
+For an existing gateway ledger from before engine-scoped claims, stop dispatch
+and freeze workflow reruns before upgrading. Legacy four-field claims hold every
+engine until reconciled; do not delete them. For each **completed** legacy claim,
+independently verify its engine SHA from a trusted matching workflow run and
+canonical state, then call the operator-only ledger API
+`bindLegacyCompletedEngine(ORIGINAL_DELIVERY_ID, VERIFIED_ENGINE_SHA)` using
+`SqliteCommandLedger` from `dist/src/app/command-ledger.js` against the persistent
+ledger. Back up the ledger consistently first. This transaction binds the
+completed claim and all associated delivery records to that engine, preserving
+comment/delivery tombstones. Active, ambiguous or unproven legacy claims remain
+held and use the existing reconciliation process. Deploy matching gateway and
+workflow versions before resuming; the new signed callback requires `engineSha`.
+
+### Pending-run and dispatch recovery (operator only)
+
+Canonical concurrency is `ai-review-v2-canonical-<repository>-<PR>` with
+`cancel-in-progress: false` and `queue: max`. GitHub queues up to 100 pending
+runs; overflow may still be cancelled. Every comparison or explicit shadow uses
+`ai-review-v2-shadow-<run-id>-<repository>-<PR>`, so experiments cannot replace
+pending canonical commands or each other. Run titles bind canonical executions
+to `AI PR Review V2 canonical <delivery-id>` for inspection.
+
+After an accepted dispatch that never executed, use the local recovery CLI with
+the persistent ledger and gateway environment. It mints only a single-central-
+repository metadata/Actions read token from the dispatcher App. It is not an HTTP
+endpoint and is never callable by PR authors or model tools.
+
+```bash
+node dist/src/app/reconcile.js inspect DELIVERY_ID
+```
+
+Results distinguish `ACTIVE` (queued/pending/waiting/running), `COMPLETED`
+(immutable ledger), `EXECUTED_OR_UNKNOWN` (any job in any attempt, or an executed
+terminal run), `NO_MATCHING_RUN`, `AMBIGUOUS`, and `PROVEN_NOT_EXECUTED` (all
+matching runs cancelled, zero jobs across all attempts). API failure, retention,
+missing titles, incomplete/oversized history and ambiguous dispatch leave the
+claim held. **No matching run is not proof that dispatch never reached GitHub**.
+The bounded inspection covers at most 1,000 retained workflow runs; older/unlinked
+evidence requires direct operator investigation, never a blind ledger delete.
+
+To release a proven cancelled, never-started command, first stop the gateway,
+disable the central workflow and prohibit dispatch/reruns during maintenance.
+Cancel any queued matching runs and verify none has started. With that freeze
+still in effect:
+
+```bash
+AI_REVIEW_RECONCILIATION_FROZEN=true node dist/src/app/reconcile.js release DELIVERY_ID
+```
+
+The CLI rereads GitHub evidence twice and releases only the original delivery if
+both reads prove cancellation with zero jobs. Signed comment/delivery tombstones
+survive. Resume the workflow/gateway, then post a **new** command. Completed
+PASS/BLOCK claims cannot be released. Any started execution must recover via its
+original completion/publisher jobs and canonical artifacts; never pay for a
+fresh model run just to repair publication. For a definitely unsubmitted command,
+an operator must independently prove no request reached GitHub before using the
+low-level ledger `reconcile(delivery, "proven_not_dispatched")` API; absent or old
+run records and elapsed time do not establish that proof.
+
+GitHub APIs and SQLite cannot participate in one transaction. The maintenance
+freeze is required to prevent a trusted operator's concurrent dispatch/rerun from
+invalidating inspection. This is deliberate operator-only recovery, not an
+automatic timeout sweeper.
+
+### CodeGraph and comparison
+
+Normal App requests select graph `off`. A trusted central `workflow_dispatch`
+may select `graphMode: "codegraph"`. The pinned `@colbymchenry/codegraph@1.6.1`
+processor runs over a fresh exact HEAD snapshot in a nonroot, network-disabled,
+read-only container. Source is inert; target CodeGraph configuration, indexes
+and ignore files are not loaded. Limits cover time, memory, processes, input,
+output, graph traversal and dynamic-boundary scans. Failed graph generation
+records a fixed failure code and falls back to ordinary review.
+The optional image build occurs before credentials are minted and may fail
+without stopping ordinary review; an unavailable image records `UNAVAILABLE`.
+
+Dispatch the same validated request with `compare: true` to run both `off` and
+`codegraph` as fresh private shadows, including when production state is cached.
+Neither arm publishes or changes production state. An explicit shadow request
+requires a safe `experimentId`; the workflow comparison defaults it to run ID.
+Shadow state uses the separate `ai-review-experiment-v2-*` namespace. Aggregate
+`ai-review-telemetry-<run>-<arm>` artifacts record target/base/head/engine, variant,
+model panel, finding/blocker counts, tokens (null if unavailable), latency and
+graph status. Private requirements, raw sessions and CI logs are never uploaded.
+Compare with known human findings/material regressions; extra findings do not
+prove usefulness. An ordinary canonical request selects one production variant.
+
+For a trusted operator experiment, save a `ReviewRequest` JSON with
+`trigger: {kind: "internal", actor: "YOUR_GITHUB_LOGIN"}`, the target repository,
+PR number and exact current base/head/baseBranch from GitHub. Set
+`schema_version: 2`, `requirementsSource: {kind: "none"}`, `graphMode: "off"`
+and `execution: "canonical"`; then dispatch both shadows:
+
+```bash
+gh workflow run central-ai-pr-review.yml --repo OWNER/PRIVATE_EXECUTION_REPO \
+  --ref main --field request="$(cat request.json)" --field compare=true
+```
+
+Use the actual protected default branch if different. The workflow resolves the
+target's installation through authenticated GitHub APIs and rechecks the actor's
+write access and exact base/head. Internal requests do not create gateway claims
+or completion callbacks. Set `requirementsSource` to the explicit Linear provider
+when testing that evidence; credentials still come only from central secrets.
+
+### Live acceptance evidence to collect
+
+Run `test/promotion/app-e2e.test.ts` for the deterministic fake lifecycle first.
+It covers signed command, central engine orchestration, exact-head BLOCK,
+Check Run, stable summary, inline finding, correction, new command, blocker closure,
+PASS, same-engine deduplication, an engine upgrade on unchanged target code and
+private shadows. It uses fake credentials/models and is not a live run.
+
+On a real installed test repository with **no consumer workflow/config/secrets**:
+open the broken fixture PR, comment as a write collaborator, record signed webhook
+receipt and central run, then capture exact base/head, App-owned check, summary and
+inline finding. Push the correction and post a new command; verify old blocker
+closure and PASS. Record unauthorized/duplicate commands causing no model spend,
+a push during review preventing stale publication, same-head reuse, and separate
+graph shadows. Preserve URLs, exact engine SHA and operator evidence in an
+acceptance record. Keep V1 and informational merge behavior until accepted.
+
+## Legacy V1 operations
+
 The reusable workflow runs trusted central code on Ubuntu 24.04 with Node 22.19.0. Every job checks out the called workflow repository at `job.workflow_sha` and verifies that exact engine identity. Consumer PR code is inert review evidence; its scripts, dependencies and local actions are never executed.
 
 ## Stage 1 production acceptance record

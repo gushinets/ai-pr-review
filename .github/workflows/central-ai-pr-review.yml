@@ -1,0 +1,202 @@
+name: AI PR Review V2 (central)
+run-name: AI PR Review V2 ${{ (inputs.compare || fromJSON(inputs.request).execution == 'shadow') && 'shadow' || 'canonical' }} ${{ fromJSON(inputs.request).trigger.deliveryId || github.run_id }}
+on:
+  workflow_dispatch:
+    inputs:
+      request:
+        description: Validated ReviewRequest JSON from the App gateway
+        required: true
+        type: string
+      compare:
+        description: Run both graph arms as private shadows, preserving the production verdict
+        type: boolean
+        default: false
+permissions: {}
+concurrency:
+  group: ai-review-v2-${{ (inputs.compare || fromJSON(inputs.request).execution == 'shadow') && format('shadow-{0}', github.run_id) || 'canonical' }}-${{ fromJSON(inputs.request).repository }}-${{ fromJSON(inputs.request).prNumber }}
+  cancel-in-progress: false
+  queue: max
+jobs:
+  review:
+    # State provenance and engine credentials belong only to the protected default branch.
+    if: github.event.repository.private && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        graph_arm: ${{ fromJSON(inputs.compare && '["off","codegraph"]' || format('["{0}"]', fromJSON(inputs.request).graphMode)) }}
+    env:
+      REVIEW_REQUEST: ${{ inputs.request }}
+      GRAPH_ARM: ${{ matrix.graph_arm }}
+      COMPARE: ${{ inputs.compare }}
+      ENGINE_SHA: ${{ github.sha }}
+      EXECUTION_REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify central engine identity
+        run: test "$(git rev-parse HEAD)" = "$ENGINE_SHA"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "22.19.0"
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Install confined reviewer search binaries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ripgrep fd-find
+      - name: Build pinned graph processor before credentials are minted
+        if: matrix.graph_arm == 'codegraph'
+        continue-on-error: true
+        run: docker build -t ai-pr-review-codegraph:1.6.1 graph
+      - id: read-token
+        name: Mint target-only read credential
+        env:
+          GITHUB_APP_ID: ${{ vars.AI_REVIEW_APP_ID }}
+          GITHUB_APP_PRIVATE_KEY: ${{ secrets.AI_REVIEW_APP_PRIVATE_KEY }}
+        run: npm run cli:central -- token-read
+      - id: prepare
+        env:
+          TARGET_READ_TOKEN: ${{ steps.read-token.outputs.token }}
+          STATE_READ_TOKEN: ${{ github.token }}
+          STATE_REPOSITORY: ${{ github.repository }}
+          STATE_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          LINEAR_CLIENT_ID: ${{ secrets.LINEAR_CLIENT_ID }}
+          LINEAR_CLIENT_SECRET: ${{ secrets.LINEAR_CLIENT_SECRET }}
+        run: npm run cli:central -- prepare
+      - id: graph
+        if: steps.prepare.outputs.action == 'EXECUTE'
+        env:
+          GRAPH_MODE: ${{ matrix.graph_arm }}
+        run: npm run cli:central -- graph
+      - id: execute
+        if: steps.prepare.outputs.action == 'EXECUTE'
+        env:
+          TARGET_READ_TOKEN: ${{ steps.read-token.outputs.token }}
+          QWEN_TOKEN_PLAN_API_KEY: ${{ secrets.QWEN_TOKEN_PLAN_API_KEY }}
+        run: npm run cli:central -- execute
+      - id: verify
+        if: steps.prepare.outputs.action == 'STATE_READY' || steps.prepare.outputs.action == 'EXECUTE'
+        env:
+          TARGET_READ_TOKEN: ${{ steps.read-token.outputs.token }}
+          STATE_READ_TOKEN: ${{ github.token }}
+          STATE_REPOSITORY: ${{ github.repository }}
+        run: npm run cli:central -- verify
+      - id: upload
+        if: steps.verify.outputs.state_ready == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ${{ steps.verify.outputs.artifact_name }}
+          path: ${{ runner.temp }}/ai-pr-review/out/ai-review-state-v1.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Store aggregate comparison telemetry separately
+        if: steps.verify.outputs.state_ready == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ai-review-telemetry-${{ github.run_id }}-${{ matrix.graph_arm }}
+          path: ${{ runner.temp }}/ai-pr-review/experiment/telemetry.json
+          if-no-files-found: error
+          retention-days: 90
+      - name: Remove private snapshot and model runtime
+        if: always()
+        run: rm -rf -- "${RUNNER_TEMP:?}/ai-pr-review"
+
+  publisher:
+    needs: review
+    if: always() && github.event.repository.private && !inputs.compare && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && fromJSON(inputs.request).execution == 'canonical'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      publication_complete: ${{ steps.publish.outputs.publication_complete }}
+    env:
+      REVIEW_REQUEST: ${{ inputs.request }}
+      ENGINE_SHA: ${{ github.sha }}
+      EXECUTION_REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "22.19.0"
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - id: download
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        continue-on-error: true
+        with:
+          pattern: ai-review-state-v2-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/ai-pr-review/out
+      - id: has-state
+        run: |
+          if test -s "$RUNNER_TEMP/ai-pr-review/out/ai-review-state-v1.json"; then
+            echo 'ready=true' >> "$GITHUB_OUTPUT"
+          fi
+      - id: publish-token
+        if: steps.has-state.outputs.ready == 'true'
+        env:
+          GITHUB_APP_ID: ${{ vars.AI_REVIEW_APP_ID }}
+          GITHUB_APP_PRIVATE_KEY: ${{ secrets.AI_REVIEW_APP_PRIVATE_KEY }}
+        run: npm run cli:central -- token-publish
+      - id: publish
+        if: steps.has-state.outputs.ready == 'true'
+        env:
+          TARGET_WRITE_TOKEN: ${{ steps.publish-token.outputs.token }}
+          PUBLISHER_APP_ID: ${{ steps.publish-token.outputs.app_id }}
+          PUBLISHER_BOT_LOGIN: ${{ steps.publish-token.outputs.bot_login }}
+        run: npm run cli:central -- publish
+      - name: Remove canonical publisher input
+        if: always()
+        run: rm -rf -- "${RUNNER_TEMP:?}/ai-pr-review"
+
+  completion:
+    needs: [review, publisher]
+    if: always() && github.event.repository.private && !inputs.compare && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && fromJSON(inputs.request).execution == 'canonical' && fromJSON(inputs.request).trigger.kind == 'app'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    env:
+      REVIEW_REQUEST: ${{ inputs.request }}
+      ENGINE_SHA: ${{ github.sha }}
+      EXECUTION_REPOSITORY_PRIVATE: ${{ github.event.repository.private }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "22.19.0"
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        continue-on-error: true
+        with:
+          pattern: ai-review-state-v2-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/ai-pr-review/out
+      - name: Reconcile publication or terminal retryable failure
+        env:
+          AI_REVIEW_GATEWAY_URL: ${{ vars.AI_REVIEW_GATEWAY_URL }}
+          AI_REVIEW_COMPLETION_SECRET: ${{ secrets.AI_REVIEW_COMPLETION_SECRET }}
+          CANONICAL_UPLOADED: ${{ needs.publisher.outputs.publication_complete == 'true' }}
+          PUBLICATION_SUCCEEDED: ${{ needs.publisher.outputs.publication_complete == 'true' }}
+        run: npm run cli:central -- complete
+      - name: Remove canonical completion input
+        if: always()
+        run: rm -rf -- "${RUNNER_TEMP:?}/ai-pr-review"

@@ -1,0 +1,8 @@
+{
+  "name": "ai-pr-review-codegraph-runtime",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@colbymchenry/codegraph": "1.6.1"
+  }
+}

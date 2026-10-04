@@ -66,7 +66,8 @@ export async function runCli(
       !Number.isSafeInteger(attempt.pr_number) ||
       Object.values(attempt).some((v) => typeof v === "string" && /[\p{Cc}\p{Cf}]/u.test(v)) ||
       (identity !== null &&
-        (!validateReviewIdentity(identity).ok || /[\p{Cc}\p{Cf}]/u.test(identity.linear_issue))) ||
+        (!validateReviewIdentity(identity).ok ||
+          /[\p{Cc}\p{Cf}]/u.test(identity.linear_issue ?? ""))) ||
       (phase !== "emit-preflight-unable" &&
         (identity === null || values["unable-reason"] !== undefined)) ||
       (phase === "emit-preflight-unable" &&
